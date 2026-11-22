@@ -18,7 +18,7 @@ object Backup {
     fun toJson(d: BackupData): String {
         val o = JSONObject()
         o.put("app", "FabricLedger")
-        o.put("version", 1)
+        o.put("version", 2)
         o.put("fabrics", JSONArray().also { a ->
             d.fabrics.forEach { f ->
                 a.put(JSONObject().put("id", f.id).put("name", f.name).put("type", f.type).put("color", f.color)

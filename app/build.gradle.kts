@@ -1,3 +1,7 @@
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,15 +17,33 @@ android {
         applicationId = "com.fabric.ledger"
         minSdk = 24
         targetSdk = 35
-        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
-        versionName = "1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        // دقائق منذ 1970: يزداد مع كل بناء سواء محلياً أو على GitHub فلا يُرفض التحديث كـ «إصدار أقدم»
+        versionCode = (System.currentTimeMillis() / 60000L).toInt()
+        // يتغير تلقائياً مع كل بناء:
+        //  - على GitHub: 1.<رقم التشغيل>  (نفس رقم ملف الـ APK والـ Release)
+        //  - محلياً: 1.dev.<تاريخ.وقت البناء>  مثل 1.dev.261122.1530
+        val run = System.getenv("GITHUB_RUN_NUMBER")
+        versionName = if (run != null) "1.$run"
+        else "1.dev." + SimpleDateFormat("yyMMdd.HHmm", Locale.US).format(Date())
     }
 
+    // مفتاح توقيع ثابت داخل المشروع: كل البناءات (محلية أو GitHub) تُوقَّع بنفس المفتاح فيعمل التحديث فوق النسخة القديمة.
+    // للنشر على المتجر أو لمشروع عام: غيّر الكلمات عبر متغيرات البيئة KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD أو استبدل الملف.
+    signingConfigs {
+        create("shared") {
+            storeFile = file("fabric-ledger.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "fabricledger"
+            keyAlias = System.getenv("KEY_ALIAS") ?: "fabric"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: "fabricledger"
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
-            // موقّع بمفتاح debug ليُثبَّت مباشرة على الهاتف
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("shared")
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("shared")
         }
     }
     compileOptions {

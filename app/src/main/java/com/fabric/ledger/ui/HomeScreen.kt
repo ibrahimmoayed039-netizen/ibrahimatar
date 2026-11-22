@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,7 +48,7 @@ fun HomeScreen(
     vm: MainViewModel, onOpenCustomer: (Long) -> Unit, onNewSale: () -> Unit,
     onEditSale: (Long) -> Unit, onOpenFabric: (Long) -> Unit
 ) {
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val fabrics by vm.fabrics.collectAsStateWithLifecycle()
     val customers by vm.customers.collectAsStateWithLifecycle()
     val sales by vm.sales.collectAsStateWithLifecycle()
@@ -61,6 +62,8 @@ fun HomeScreen(
     val shop by vm.shopName.collectAsStateWithLifecycle()
     val cc by vm.countryCode.collectAsStateWithLifecycle()
     var settingsDlg by remember { mutableStateOf(false) }
+    var lockDlg by remember { mutableStateOf(false) }
+    val lockEnabled by vm.lockEnabled.collectAsStateWithLifecycle()
 
     var fabricDlg by remember { mutableStateOf(false) }
     var fabricEdit by remember { mutableStateOf<Fabric?>(null) }
@@ -71,17 +74,20 @@ fun HomeScreen(
     var supPayDlg by remember { mutableStateOf(false) }
     var editSupPay by remember { mutableStateOf<SupplierPayment?>(null) }
 
-    var custQuery by remember { mutableStateOf("") }
-    var custFilter by remember { mutableIntStateOf(0) }
-    var fabQuery by remember { mutableStateOf("") }
-    var fabFilter by remember { mutableIntStateOf(0) }
+    var custQuery by rememberSaveable { mutableStateOf("") }
+    var custFilter by rememberSaveable { mutableIntStateOf(0) }
+    var fabQuery by rememberSaveable { mutableStateOf("") }
+    var fabFilter by rememberSaveable { mutableIntStateOf(0) }
 
     val context = LocalContext.current
+    val versionName = remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
+    }
     var menu by remember { mutableStateOf(false) }
     var pendingRestore by remember { mutableStateOf<Uri?>(null) }
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) vm.exportTo(uri) { ok ->
-            Toast.makeText(context, if (ok) "تم حفظ النسخة الاحتياطية" else "فشل حفظ النسخة", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, if (ok) "تم حفظ النسخة الاحتياطية (مع الصور)" else "فشل حفظ النسخة", Toast.LENGTH_LONG).show()
         }
     }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -104,7 +110,7 @@ fun HomeScreen(
                                 onClick = {
                                     menu = false
                                     val day = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
-                                    exportLauncher.launch("fabric-ledger-backup-$day.json")
+                                    exportLauncher.launch("fabric-ledger-backup-$day.zip")
                                 }
                             )
                             DropdownMenuItem(
@@ -114,6 +120,16 @@ fun HomeScreen(
                             DropdownMenuItem(
                                 text = { Text("إعدادات الكشف والتذكير") },
                                 onClick = { menu = false; settingsDlg = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (lockEnabled) "قفل التطبيق (مفعّل)" else "قفل التطبيق برقم سري") },
+                                onClick = { menu = false; lockDlg = true }
+                            )
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("الإصدار $versionName", style = MaterialTheme.typography.bodySmall) },
+                                enabled = false,
+                                onClick = {}
                             )
                         }
                     }
@@ -387,6 +403,13 @@ fun HomeScreen(
         onDismiss = { fabricDlg = false }
     )
     if (customerDlg) CustomerDialog(onSave = { vm.saveCustomer(it); customerDlg = false }, onDismiss = { customerDlg = false })
+    if (lockDlg) LockSettingsDialog(
+        enabled = lockEnabled,
+        onEnable = { vm.enableLock(it) },
+        onChange = { old, new -> vm.changePin(old, new) },
+        onDisable = { vm.disableLock(it) },
+        onDismiss = { lockDlg = false }
+    )
     if (settingsDlg) SettingsDialog(
         initialGrace = grace, initialShop = shop, initialCc = cc,
         onSave = { g, sh, c -> vm.saveSettings(g, sh, c); settingsDlg = false },

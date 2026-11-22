@@ -70,6 +70,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _grace.value = grace; _shop.value = shop; _cc.value = cc
     }
 
+    // ---------- قفل التطبيق ----------
+    private val _lockEnabled = MutableStateFlow(settings.hasPin)
+    private val _locked = MutableStateFlow(settings.hasPin)   // يبدأ مقفلاً مع كل تشغيل جديد
+    val lockEnabled: StateFlow<Boolean> = _lockEnabled
+    val locked: StateFlow<Boolean> = _locked
+    fun pinLength(): Int = settings.pinLen
+    fun unlock(pin: String): Boolean = settings.checkPin(pin).also { if (it) _locked.value = false }
+    fun lockIfEnabled() { if (_lockEnabled.value) _locked.value = true }
+    fun enableLock(pin: String) { settings.setPin(pin); _lockEnabled.value = true }
+    fun changePin(old: String, new: String): Boolean =
+        settings.checkPin(old).also { if (it) settings.setPin(new) }
+    fun disableLock(current: String): Boolean =
+        settings.checkPin(current).also { if (it) { settings.clearPin(); _lockEnabled.value = false; _locked.value = false } }
+
     val overdue: StateFlow<Map<Long, Map<String, Overdue>>> = combine(sales, payments, _grace) { s, p, g ->
         val byCustomer = p.groupBy { it.customerId }
         s.filter { it.customerId > 0 }.groupBy { it.customerId }
@@ -102,7 +116,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun itemsNow(saleId: Long) = dao.itemsNow(saleId)
     suspend fun fabricsNow() = dao.fabricsNow()
 
-    fun saveFabric(f: Fabric) { viewModelScope.launch { dao.upsertFabric(f) } }
+    /** رسائل عامة تُعرض كـ Toast (مثل فشل الحفظ) */
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val messages: SharedFlow<String> = _messages
+
+    /** حفظ آمن: أي خطأ في القاعدة يظهر كرسالة بدل إغلاق التطبيق */
+    private fun safeSave(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) { runCatching { block() }.isSuccess }
+            if (!ok) _messages.tryEmit("تعذر الحفظ، حاول مجدداً")
+        }
+    }
+
+    fun saveFabric(f: Fabric) = safeSave { dao.upsertFabric(f) }
     fun deleteFabric(f: Fabric, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) {
         dao.removeFabric(f)
         com.fabric.ledger.ui.deleteFabricImage(f.imagePath)
@@ -119,14 +145,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             onDone(k)
         }
     }
-    fun saveCustomer(c: Customer) { viewModelScope.launch { dao.upsertCustomer(c) } }
+    fun saveCustomer(c: Customer) = safeSave { dao.upsertCustomer(c) }
 
-    fun addPayment(customerId: Long, amount: Double, note: String, currency: String = "IQD") {
-        viewModelScope.launch {
-            dao.upsertPayment(Payment(customerId = customerId, date = System.currentTimeMillis(), amount = amount, note = note, currency = currency))
-        }
+    fun addPayment(customerId: Long, amount: Double, note: String, currency: String = "IQD") = safeSave {
+        dao.upsertPayment(Payment(customerId = customerId, date = System.currentTimeMillis(), amount = amount, note = note, currency = currency))
     }
-    fun savePayment(p: Payment) { viewModelScope.launch { dao.upsertPayment(p) } }
+    fun savePayment(p: Payment) = safeSave { dao.upsertPayment(p) }
     /** كل عمليات الحذف تُنفَّذ خارج الخيط الرئيسي داخل try/catch وتُبلغ بالنتيجة */
     private fun safeDelete(onDone: (Boolean) -> Unit, block: suspend () -> Unit) {
         viewModelScope.launch {
@@ -136,23 +160,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun deletePayment(p: Payment, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.deletePayment(p) }
 
-    fun saveSale(sale: Sale, items: List<SaleItem>, onDone: () -> Unit) {
-        viewModelScope.launch { dao.saveSale(sale, items); onDone() }
-    }
-    fun updateSale(sale: Sale, items: List<SaleItem>, onDone: () -> Unit) {
-        viewModelScope.launch { dao.updateSale(sale, items); onDone() }
-    }
+    fun saveSale(sale: Sale, items: List<SaleItem>, onDone: (Boolean) -> Unit) = safeDelete(onDone) { dao.saveSale(sale, items) }
+    fun updateSale(sale: Sale, items: List<SaleItem>, onDone: (Boolean) -> Unit) = safeDelete(onDone) { dao.updateSale(sale, items) }
     fun deleteSale(id: Long, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.deleteSale(id) }
 
-    // ---------- النسخ الاحتياطي ----------
+    // ---------- النسخ الاحتياطي (ملف zip: البيانات + صور الأصناف) ----------
     fun exportTo(uri: Uri, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val json = Backup.toJson(dao.snapshot())
-                    getApplication<Application>().contentResolver.openOutputStream(uri, "wt")!!.use {
-                        it.write(json.toByteArray(Charsets.UTF_8))
-                    }
+                    val data = dao.snapshot()
+                    getApplication<Application>().contentResolver.openOutputStream(uri, "wt")!!.use { BackupFiles.write(it, data) }
                 }.isSuccess
             }
             onResult(ok)
@@ -163,10 +181,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val text = getApplication<Application>().contentResolver.openInputStream(uri)!!.use {
-                        it.readBytes().toString(Charsets.UTF_8)
-                    }
-                    dao.restoreAll(Backup.fromJson(text))
+                    val ctx = getApplication<Application>()
+                    // القراءة والتحقق أولاً؛ لا يُمسّ شيء من البيانات الحالية إن كان الملف تالفاً
+                    val data = ctx.contentResolver.openInputStream(uri)!!.use { BackupFiles.read(ctx, it) }
+                    dao.restoreAll(data)
+                    BackupFiles.cleanupImages(ctx, data.fabrics.map { it.imagePath })
                 }.isSuccess
             }
             onResult(ok)

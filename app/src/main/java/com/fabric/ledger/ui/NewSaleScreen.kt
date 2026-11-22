@@ -80,16 +80,16 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
     val customer = customers.find { it.id == customerId }
     val total = if (amountOnly) listAmount.toD() else lines.sumOf { it.meters() * it.price.toD() }
     val isCash = customerId == 0L
-    val paidVal = if (isCash) total else paid.toD().coerceIn(0.0, total)
+    val paidVal = if (isCash) total else paid.toD().coerceIn(0.0, maxOf(total, 0.0))
 
     fun save() {
         if (amountOnly) {
             if (customerId <= 0) { error = "اختر الزبون لتسجيل قائمة بمبلغ فقط"; return }
             if (total <= 0.0) { error = "اكتب مبلغ القائمة"; return }
             if (isEdit) {
-                vm.updateSale(Sale(id = editSaleId, customerId = customerId, date = origDate, total = total, paid = paidVal, note = listNote.trim(), currency = currency), emptyList()) { onDone() }
+                vm.updateSale(Sale(id = editSaleId, customerId = customerId, date = origDate, total = total, paid = paidVal, note = listNote.trim(), currency = currency), emptyList()) { ok -> if (ok) onDone() else error = "تعذر حفظ الفاتورة، حاول مجدداً" }
             } else {
-                vm.saveSale(Sale(customerId = customerId, date = System.currentTimeMillis(), total = total, paid = paidVal, note = listNote.trim(), currency = currency), emptyList()) { onDone() }
+                vm.saveSale(Sale(customerId = customerId, date = System.currentTimeMillis(), total = total, paid = paidVal, note = listNote.trim(), currency = currency), emptyList()) { ok -> if (ok) onDone() else error = "تعذر حفظ الفاتورة، حاول مجدداً" }
             }
             return
         }
@@ -112,12 +112,12 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
             vm.updateSale(
                 Sale(id = editSaleId, customerId = customerId, date = origDate, total = total, paid = paidVal, currency = currency),
                 items
-            ) { onDone() }
+            ) { ok -> if (ok) onDone() else error = "تعذر حفظ الفاتورة، حاول مجدداً" }
         } else {
             vm.saveSale(
                 Sale(customerId = customerId, date = System.currentTimeMillis(), total = total, paid = paidVal, currency = currency),
                 items
-            ) { onDone() }
+            ) { ok -> if (ok) onDone() else error = "تعذر حفظ الفاتورة، حاول مجدداً" }
         }
     }
 

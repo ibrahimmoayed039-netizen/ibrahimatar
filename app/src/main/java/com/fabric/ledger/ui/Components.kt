@@ -28,7 +28,10 @@ import java.util.Date
 import java.util.Locale
 
 fun Double.fmt(): String = String.format(Locale.US, "%,.2f", this)
-fun Double.plain(): String = if (this % 1.0 == 0.0) toLong().toString() else toString()
+/** رقم مقروء: حتى 3 خانات عشرية بلا أصفار زائدة (يمنع 12.350000000000001) */
+fun Double.plain(): String =
+    if (isNaN() || isInfinite()) "0"
+    else java.math.BigDecimal.valueOf(this).setScale(3, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
 /** هل الصنف يُباع بالأمتار فيصلح له الإدخال بالقطعة؟ */
 fun Fabric.supportsPieces(): Boolean = unit == "متر"
 
@@ -119,7 +122,8 @@ fun Fabric.isLow(): Boolean = minStock > 0 && stock <= minStock
 @Composable
 fun NumField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier) {
     OutlinedTextField(
-        value = value, onValueChange = onChange, label = { Text(label) },
+        // أرقام وفاصلة عشرية فقط (يمنع الإشارة السالبة وأي نص)
+        value = value, onValueChange = { onChange(it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '\u066B' }) }, label = { Text(label) },
         singleLine = true, modifier = modifier,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
     )
@@ -506,7 +510,7 @@ fun PurchaseDialog(
     val piecesCount = when (effMode) { 2 -> bales.toD() * perBale.toD(); 1 -> pieces.toD(); else -> 0.0 }
     val meters = if (effMode >= 1) piecesCount * plen.toD() else qty.toD()
     val total = meters * cost.toD()
-    val paidVal = paid.toD().coerceIn(0.0, total)
+    val paidVal = paid.toD().coerceIn(0.0, maxOf(total, 0.0))
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "تسجيل شراء" else "تعديل شراء") },

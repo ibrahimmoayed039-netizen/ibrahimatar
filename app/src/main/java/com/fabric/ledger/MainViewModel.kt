@@ -41,15 +41,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         (bought.keys + sold.keys).associateWith { FabricTotals(bought[it] ?: 0.0, sold[it] ?: 0.0) }
     }.state(emptyMap())
 
-    /** رصيد كل زبون = مجموع (الإجمالي - المدفوع) من الفواتير - الدفعات */
-    val balances: StateFlow<Map<Long, Double>> =
+    /** رصيد كل زبون لكل عملة على حدة (لا تحويل بين الدينار والدولار) = مجموع (الإجمالي - المدفوع) - الدفعات */
+    val balances: StateFlow<Map<Long, Map<String, Double>>> =
         combine(sales, payments) { s, p ->
-            val m = mutableMapOf<Long, Double>()
+            val m = mutableMapOf<Long, MutableMap<String, Double>>()
             s.filter { it.customerId > 0 }.forEach {
-                m[it.customerId] = (m[it.customerId] ?: 0.0) + (it.total - it.paid)
+                val c = m.getOrPut(it.customerId) { mutableMapOf() }
+                c[it.currency] = (c[it.currency] ?: 0.0) + (it.total - it.paid)
             }
-            p.forEach { m[it.customerId] = (m[it.customerId] ?: 0.0) - it.amount }
-            m.toMap()
+            p.forEach {
+                val c = m.getOrPut(it.customerId) { mutableMapOf() }
+                c[it.currency] = (c[it.currency] ?: 0.0) - it.amount
+            }
+            m.mapValues { e -> e.value.toMap() }
         }.state(emptyMap())
 
     // ---------- الإعدادات والدين المتأخر ----------
@@ -66,23 +70,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _grace.value = grace; _shop.value = shop; _cc.value = cc
     }
 
-    val overdue: StateFlow<Map<Long, Overdue>> = combine(sales, payments, _grace) { s, p, g ->
+    val overdue: StateFlow<Map<Long, Map<String, Overdue>>> = combine(sales, payments, _grace) { s, p, g ->
         val byCustomer = p.groupBy { it.customerId }
         s.filter { it.customerId > 0 }.groupBy { it.customerId }
-            .mapValues { (cid, list) -> Debt.overdue(list, byCustomer[cid] ?: emptyList(), g) }
+            .mapValues { (cid, list) ->
+                list.groupBy { it.currency }.mapValues { (cur, sl) ->
+                    Debt.overdue(sl, (byCustomer[cid] ?: emptyList()).filter { it.currency == cur }, g)
+                }
+            }
     }.state(emptyMap())
 
     /** سطور كشف الحساب مرتبة من الأقدم إلى الأحدث */
     suspend fun statementRows(customerId: Long): List<StatementRow> {
         val items = dao.allItemsNow().groupBy { it.saleId }
         val saleRows = dao.salesNow().filter { it.customerId == customerId }.map { s ->
-            val detail = (items[s.id] ?: emptyList()).joinToString("، ") {
+            val list = items[s.id] ?: emptyList()
+            val detail = if (list.isEmpty()) (if (s.note.isBlank()) "قائمة بمبلغ فقط" else "قائمة: ${s.note}")
+            else list.joinToString("، ") {
                 "${it.fabricName} ${qtyText(it.pieces, it.quantity, it.unit)} × ${it.unitPrice.plain()}"
             }
-            StatementRow(s.date, "فاتورة", detail, s.total, s.paid)
+            StatementRow(s.date, "فاتورة", detail, s.total, s.paid, s.currency)
         }
         val payRows = dao.paymentsNow().filter { it.customerId == customerId }.map {
-            StatementRow(it.date, "دفعة", it.note, 0.0, it.amount)
+            StatementRow(it.date, "دفعة", it.note, 0.0, it.amount, it.currency)
         }
         return (saleRows + payRows).sortedBy { it.date }
     }
@@ -93,17 +103,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun fabricsNow() = dao.fabricsNow()
 
     fun saveFabric(f: Fabric) { viewModelScope.launch { dao.upsertFabric(f) } }
-    fun deleteFabric(f: Fabric, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.removeFabric(f) }
+    fun deleteFabric(f: Fabric, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) {
+        dao.removeFabric(f)
+        com.fabric.ledger.ui.deleteFabricImage(f.imagePath)
+    }
     fun saveSupplierPayment(p: SupplierPayment, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.upsertSupplierPayment(p) }
     fun deleteSupplierPayment(p: SupplierPayment, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.deleteSupplierPayment(p) }
     fun addPurchase(p: Purchase, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.addPurchase(p) }
     fun editPurchase(p: Purchase, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.editPurchase(p) }
     fun deletePurchase(id: Long, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.removePurchase(id) }
+    /** فتح n بالة من صنف؛ يُرجع عدد البالات التي فُتحت فعلاً */
+    fun openBales(id: Long, n: Double, onDone: (Double) -> Unit = {}) {
+        viewModelScope.launch {
+            val k = withContext(Dispatchers.IO) { runCatching { dao.openBales(id, n) }.getOrDefault(0.0) }
+            onDone(k)
+        }
+    }
     fun saveCustomer(c: Customer) { viewModelScope.launch { dao.upsertCustomer(c) } }
 
-    fun addPayment(customerId: Long, amount: Double, note: String) {
+    fun addPayment(customerId: Long, amount: Double, note: String, currency: String = "IQD") {
         viewModelScope.launch {
-            dao.upsertPayment(Payment(customerId = customerId, date = System.currentTimeMillis(), amount = amount, note = note))
+            dao.upsertPayment(Payment(customerId = customerId, date = System.currentTimeMillis(), amount = amount, note = note, currency = currency))
         }
     }
     fun savePayment(p: Payment) { viewModelScope.launch { dao.upsertPayment(p) } }

@@ -17,7 +17,24 @@ data class Fabric(
     /** حد التنبيه: عند نزول المخزون إلى هذه الكمية أو أقل يظهر تنبيه (0 = بدون تنبيه) */
     @ColumnInfo(defaultValue = "0") val minStock: Double = 0.0,
     /** طول القطعة (الطول الكامل) بالمتر؛ يُستخدم كقيمة افتراضية عند الإدخال بالقطعة (0 = غير محدد) */
-    @ColumnInfo(defaultValue = "0") val rollLength: Double = 0.0
+    @ColumnInfo(defaultValue = "0") val rollLength: Double = 0.0,
+    /** أسعار الدولار (retailPrice وwholesalePrice أعلاه هي بالدينار)؛ 0 = لا يوجد سعر بالدولار */
+    @ColumnInfo(defaultValue = "0") val retailPriceUsd: Double = 0.0,
+    @ColumnInfo(defaultValue = "0") val wholesalePriceUsd: Double = 0.0,
+    /** نوع البالة (مثلاً: بالة كبيرة، بالة صغيرة) */
+    @ColumnInfo(defaultValue = "''") val baleType: String = "",
+    /** عدد القطع داخل البالة الواحدة (0 = غير محدد) */
+    @ColumnInfo(defaultValue = "0") val piecesPerBale: Double = 0.0,
+    /** سعر شراء المتر (الافتراضي عند تسجيل الشراء) بعملة purchaseCurrency؛ 0 = غير محدد */
+    @ColumnInfo(defaultValue = "0") val purchasePrice: Double = 0.0,
+    /** عملة سعر الشراء: IQD أو USD */
+    @ColumnInfo(defaultValue = "'IQD'") val purchaseCurrency: String = "IQD",
+    /** عدد البالات المغلقة (غير المفتوحة) الداخلة ضمن المخزون */
+    @ColumnInfo(defaultValue = "0") val sealedBales: Double = 0.0,
+    /** مجموع أمتار البالات المغلقة؛ المخزون (stock) يشملها، وما زاد عنها هو القطع المفتوحة */
+    @ColumnInfo(defaultValue = "0") val sealedMeters: Double = 0.0,
+    /** مسار صورة الصنف داخل مجلد التطبيق ("" = بدون صورة) */
+    @ColumnInfo(defaultValue = "''") val imagePath: String = ""
 )
 
 @Entity(tableName = "customers")
@@ -35,7 +52,11 @@ data class Sale(
     val customerId: Long,
     val date: Long,
     val total: Double,
-    val paid: Double
+    val paid: Double,
+    /** ملاحظة/رقم القائمة؛ تُستخدم خصوصاً في «قائمة بمبلغ فقط» (بدون أصناف) */
+    @ColumnInfo(defaultValue = "''") val note: String = "",
+    /** عملة الفاتورة: IQD أو USD */
+    @ColumnInfo(defaultValue = "'IQD'") val currency: String = "IQD"
 )
 
 @Entity(tableName = "sale_items")
@@ -58,7 +79,9 @@ data class Payment(
     val customerId: Long,
     val date: Long,
     val amount: Double,
-    val note: String = ""
+    val note: String = "",
+    /** عملة الدفعة: IQD أو USD (تُخصم من دين الزبون بنفس العملة) */
+    @ColumnInfo(defaultValue = "'IQD'") val currency: String = "IQD"
 )
 
 /** عملية شراء (إدخال بضاعة للمخزن) لصنف معيّن بسعرها وعملتها؛ تزيد المخزون عند تسجيلها */
@@ -77,9 +100,13 @@ data class Purchase(
     val paid: Double = 0.0,
     val supplier: String = "",
     /** عدد القطع إن أُدخل الشراء بالقطعة (0 = أُدخل بالمتر)؛ quantity يبقى مجموع الأمتار */
-    @ColumnInfo(defaultValue = "0") val pieces: Double = 0.0
+    @ColumnInfo(defaultValue = "0") val pieces: Double = 0.0,
+    /** عدد البالات إن أُدخل الشراء بالبالة (0 = لم يُدخل بالبالة)؛ pieces = البالات × القطع في البالة */
+    @ColumnInfo(defaultValue = "0") val bales: Double = 0.0,
+    /** نوع البالة وقت الشراء */
+    @ColumnInfo(defaultValue = "''") val baleType: String = ""
 ) {
-    /** إجمالي سعر البضاعة المشتراة */
+    /** إجمالي سعر البضاعة المشتراة = سعر المتر × الأمتار (الأمتار = البالات × القطع × متر القطعة) */
     val total: Double get() = quantity * unitCost
 }
 

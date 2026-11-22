@@ -38,13 +38,15 @@ fun normalizePhone(raw: String, countryCode: String): String {
     }
 }
 
-fun reminderMessage(shop: String, name: String, balance: Double, od: Overdue?, graceDays: Int, attached: Boolean): String {
+fun reminderMessage(shop: String, name: String, balance: Map<String, Double>, od: Map<String, Overdue>?, graceDays: Int, attached: Boolean): String {
     val lines = mutableListOf("السلام عليكم $name،")
     if (attached) lines.add("مرفق كشف حسابكم.")
-    if (balance > 0.005) {
-        lines.add("الرصيد المستحق: ${balance.fmt()}")
-        if (od != null && od.amount > 0.005) {
-            lines.add("منه متأخر: ${od.amount.fmt()} (مضى أكثر من $graceDays يوماً).")
+    if (balance.hasDebt()) {
+        val debts = balance.filterValues { it > 0.005 }
+        lines.add("الرصيد المستحق: " + CURRENCIES.filter { it in debts }.joinToString(" + ") { debts[it]!!.money(it) })
+        val odText = od.overdueText()
+        if (odText != null) {
+            lines.add("منه متأخر: $odText (مضى أكثر من $graceDays يوماً).")
             lines.add("نرجو التفضل بالتسديد في أقرب وقت.")
         } else if (!attached) {
             lines.add("نرجو التفضل بالتسديد.")
@@ -116,7 +118,7 @@ object StatementPdf {
 
     fun create(
         context: Context, shop: String, customer: Customer, rows: List<StatementRow>,
-        balance: Double, overdue: Overdue?, graceDays: Int
+        balance: Map<String, Double>, overdue: Map<String, Overdue>?, graceDays: Int
     ): File {
         val st = State(PdfDocument())
         val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 10f; color = Color.BLACK }
@@ -167,7 +169,7 @@ object StatementPdf {
             cell("الرصيد", colBal, white, c, st.y + 4f)
             st.y += 22f
         }
-        fun money(v: Double) = if (v > 0.005) v.fmt() else "-"
+        fun money(v: Double, c: String) = if (v > 0.005) v.money(c) else "-"
 
         startPage()
         // ترويسة متدرجة بشريط ذهبي
@@ -199,27 +201,27 @@ object StatementPdf {
             cell(label, l to r, small, Layout.Alignment.ALIGN_CENTER, top + 9f)
             cell(value, l to r, vp, Layout.Alignment.ALIGN_CENTER, top + 26f)
         }
-        val odAmount = overdue?.amount ?: 0.0
-        if (odAmount > 0.005) {
-            card(291f, RIGHT, "الرصيد المستحق", balance.fmt(), valueP, teal)
-            card(LEFT, 277f, "منه متأخر (أكثر من $graceDays يوماً)", odAmount.fmt(), valueRed, Color.rgb(198, 40, 40))
+        val odText = overdue.overdueText()
+        if (odText != null) {
+            card(291f, RIGHT, "الرصيد المستحق", balance.balanceText(), valueP, teal)
+            card(LEFT, 277f, "منه متأخر (أكثر من $graceDays يوماً)", odText, valueRed, Color.rgb(198, 40, 40))
         } else {
-            card(LEFT, RIGHT, "الرصيد المستحق", balance.fmt(), valueP, teal)
+            card(LEFT, RIGHT, "الرصيد المستحق", balance.balanceText(), valueP, teal)
         }
         st.y += 80f
         tableHeader()
 
-        var running = 0.0
+        val running = mutableMapOf<String, Double>()
         val center = Layout.Alignment.ALIGN_CENTER
         rows.forEachIndexed { idx, r ->
-            running += r.debit - r.credit
+            running[r.currency] = (running[r.currency] ?: 0.0) + r.debit - r.credit
             val desc = r.title + if (r.detail.isNotBlank()) ": ${r.detail}" else ""
             val cells = listOf(
                 Triple(dateFmt.format(Date(r.date)), colDate, center),
                 Triple(desc, colDesc, Layout.Alignment.ALIGN_NORMAL),
-                Triple(money(r.debit), colDebit, center),
-                Triple(money(r.credit), colCredit, center),
-                Triple(running.fmt(), colBal, center)
+                Triple(money(r.debit, r.currency), colDebit, center),
+                Triple(money(r.credit, r.currency), colCredit, center),
+                Triple((running[r.currency] ?: 0.0).money(r.currency), colBal, center)
             )
             val layouts = cells.map { (t, col, a) -> layout(t, (col.second - col.first - 6f).toInt(), text, a) }
             val h = layouts.maxOf { it.height } + 8f
@@ -234,7 +236,7 @@ object StatementPdf {
         if (rows.isEmpty()) block("لا توجد حركات.", text)
         st.y += 10f
         if (st.y > BOTTOM) startPage()
-        block("الرصيد النهائي: ${running.fmt()}", mid)
+        block("الرصيد النهائي: ${running.toMap().balanceText()}", mid)
 
         st.page?.let { footer(); st.doc.finishPage(it) }
         val dir = File(context.cacheDir, "statements").apply { mkdirs() }

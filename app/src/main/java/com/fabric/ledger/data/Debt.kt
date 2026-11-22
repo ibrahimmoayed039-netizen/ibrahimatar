@@ -6,7 +6,8 @@ data class StatementRow(
     val title: String,
     val detail: String,
     val debit: Double,
-    val credit: Double
+    val credit: Double,
+    val currency: String = "IQD"
 )
 
 data class Overdue(val amount: Double, val oldestDays: Int)

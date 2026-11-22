@@ -37,7 +37,7 @@ fun CustomerScreen(
     val payments by vm.payments.collectAsStateWithLifecycle()
     val balances by vm.balances.collectAsStateWithLifecycle()
     val customer = customers.find { it.id == id }
-    val balance = balances[id] ?: 0.0
+    val balance = balances[id] ?: emptyMap()
     var payDlg by remember { mutableStateOf(false) }
     var editPay by remember { mutableStateOf<Payment?>(null) }
     var saleView by remember { mutableStateOf<Sale?>(null) }
@@ -48,7 +48,9 @@ fun CustomerScreen(
     val grace by vm.graceDays.collectAsStateWithLifecycle()
     val shop by vm.shopName.collectAsStateWithLifecycle()
     val cc by vm.countryCode.collectAsStateWithLifecycle()
-    val od = overdueMap[id]
+    val od = overdueMap[id] ?: emptyMap()
+    val odDue = od.filterValues { it.amount > 0.005 }
+    val defCur = balance.entries.firstOrNull { it.value > 0.005 }?.key ?: "IQD"
     var busy by remember { mutableStateOf(false) }
 
     val entries = (sales.filter { it.customerId == id }.map { Entry.S(it) } +
@@ -70,7 +72,7 @@ fun CustomerScreen(
                 HeroCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
                         Text("الدين الحالي")
-                        Text(balance.fmt(), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                        BalanceLines(balance)
                         if (!customer?.phone.isNullOrBlank()) Text(customer!!.phone, style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -81,15 +83,15 @@ fun CustomerScreen(
                     OutlinedButton(onClick = onNewSale, modifier = Modifier.weight(1f)) { Text("بيع جديد") }
                 }
             }
-            if (od != null && od.amount > 0.005 && customer != null) item {
+            if (odDue.isNotEmpty() && customer != null) item {
                 Card3D(
                     Modifier.fillMaxWidth(),
                     tint = MaterialTheme.colorScheme.errorContainer
                 ) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("⚠ دين متأخر: ${od.amount.fmt()}", fontWeight = FontWeight.Bold)
+                        Text("⚠ دين متأخر: ${odDue.entries.joinToString("  +  ") { it.value.amount.money(it.key) }}", fontWeight = FontWeight.Bold)
                         Text(
-                            "أقدم فاتورة غير مسددة قبل ${od.oldestDays} يوماً (مدة السماح $grace يوماً)",
+                            "أقدم فاتورة غير مسددة قبل ${odDue.values.maxOf { it.oldestDays }} يوماً (مدة السماح $grace يوماً)",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Button3D(onClick = {
@@ -136,10 +138,11 @@ fun CustomerScreen(
                             Column(Modifier.weight(1f)) {
                                 Text("فاتورة بيع", fontWeight = FontWeight.Bold)
                                 Text(e.s.date.dateStr(), style = MaterialTheme.typography.bodySmall)
+                                if (e.s.note.isNotBlank()) Text(e.s.note, style = MaterialTheme.typography.bodySmall)
                             }
                             Column(horizontalAlignment = Alignment.End) {
-                                Text(e.s.total.fmt(), fontWeight = FontWeight.Bold)
-                                Text("مدفوع ${e.s.paid.fmt()}", style = MaterialTheme.typography.bodySmall)
+                                Text(e.s.total.money(e.s.currency), fontWeight = FontWeight.Bold)
+                                Text("مدفوع ${e.s.paid.money(e.s.currency)}", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
@@ -154,7 +157,7 @@ fun CustomerScreen(
                                 Text(e.p.date.dateStr(), style = MaterialTheme.typography.bodySmall)
                                 if (e.p.note.isNotBlank()) Text(e.p.note, style = MaterialTheme.typography.bodySmall)
                             }
-                            Text("- ${e.p.amount.fmt()}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Text("- ${e.p.amount.money(e.p.currency)}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
@@ -164,14 +167,15 @@ fun CustomerScreen(
 
     if (payDlg) PaymentDialog(
         initial = null,
-        onSave = { amt, note -> vm.addPayment(id, amt, note); payDlg = false },
+        defaultCurrency = defCur,
+        onSave = { amt, note, cur -> vm.addPayment(id, amt, note, cur); payDlg = false },
         onDelete = null,
         onDismiss = { payDlg = false }
     )
     editPay?.let { p ->
         PaymentDialog(
             initial = p,
-            onSave = { amt, note -> vm.savePayment(p.copy(amount = amt, note = note)); editPay = null },
+            onSave = { amt, note, cur -> vm.savePayment(p.copy(amount = amt, note = note, currency = cur)); editPay = null },
             onDelete = { editPay = null; vm.deletePayment(p) { ok -> Toast.makeText(context, if (ok) "تم الحذف" else "تعذر الحذف", Toast.LENGTH_SHORT).show() } },
             onDismiss = { editPay = null }
         )

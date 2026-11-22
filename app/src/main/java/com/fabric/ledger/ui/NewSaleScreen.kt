@@ -40,6 +40,12 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
     var customerId by remember { mutableLongStateOf(presetCustomerId) }
     val lines = remember { mutableStateListOf(CartLine()) }
     var paid by remember { mutableStateOf("") }
+    // «قائمة بمبلغ فقط»: تسجيل قائمة شراء الزبون بمبلغها دون أصناف ولا خصم من المخزون
+    var currency by remember { mutableStateOf("IQD") }
+    var amountOnlyState by remember { mutableStateOf(false) }
+    val amountOnly = amountOnlyState && customerId > 0
+    var listAmount by remember { mutableStateOf("") }
+    var listNote by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var custMenu by remember { mutableStateOf(false) }
     var loaded by remember { mutableStateOf(!isEdit) }
@@ -53,8 +59,10 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
             val fs = vm.fabricsNow()
             val old = vm.itemsNow(editSaleId)
             customerId = s.customerId
+            currency = s.currency
             origDate = s.date
             paid = if (s.customerId == 0L) "" else s.paid.plain()
+            if (old.isEmpty() && s.customerId != 0L) { amountOnlyState = true; listAmount = s.total.plain(); listNote = s.note }
             oldQty = old.groupBy { it.fabricId }.mapValues { e -> e.value.sumOf { it.quantity } }
             lines.clear()
             old.forEach { i ->
@@ -70,11 +78,21 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
     }
 
     val customer = customers.find { it.id == customerId }
-    val total = lines.sumOf { it.meters() * it.price.toD() }
+    val total = if (amountOnly) listAmount.toD() else lines.sumOf { it.meters() * it.price.toD() }
     val isCash = customerId == 0L
     val paidVal = if (isCash) total else paid.toD().coerceIn(0.0, total)
 
     fun save() {
+        if (amountOnly) {
+            if (customerId <= 0) { error = "اختر الزبون لتسجيل قائمة بمبلغ فقط"; return }
+            if (total <= 0.0) { error = "اكتب مبلغ القائمة"; return }
+            if (isEdit) {
+                vm.updateSale(Sale(id = editSaleId, customerId = customerId, date = origDate, total = total, paid = paidVal, note = listNote.trim(), currency = currency), emptyList()) { onDone() }
+            } else {
+                vm.saveSale(Sale(customerId = customerId, date = System.currentTimeMillis(), total = total, paid = paidVal, note = listNote.trim(), currency = currency), emptyList()) { onDone() }
+            }
+            return
+        }
         val valid = lines.filter { it.fabric != null && it.meters() > 0 }
         if (customerId < 0) { error = "اختر الزبون أو البيع النقدي"; return }
         if (valid.isEmpty()) { error = "أضف صنفاً واحداً على الأقل مع الكمية"; return }
@@ -92,12 +110,12 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
         }
         if (isEdit) {
             vm.updateSale(
-                Sale(id = editSaleId, customerId = customerId, date = origDate, total = total, paid = paidVal),
+                Sale(id = editSaleId, customerId = customerId, date = origDate, total = total, paid = paidVal, currency = currency),
                 items
             ) { onDone() }
         } else {
             vm.saveSale(
-                Sale(customerId = customerId, date = System.currentTimeMillis(), total = total, paid = paidVal),
+                Sale(customerId = customerId, date = System.currentTimeMillis(), total = total, paid = paidVal, currency = currency),
                 items
             ) { onDone() }
         }
@@ -145,6 +163,26 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                 }
             }
 
+            if (customerId > 0 && !isEdit) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = !amountOnly, onClick = { amountOnlyState = false }, label = { Text("بالأصناف") })
+                FilterChip(selected = amountOnly, onClick = { amountOnlyState = true }, label = { Text("قائمة بمبلغ فقط") })
+            }
+
+            // عملة الفاتورة: دينار أو دولار (لكل فاتورة عملة واحدة، والزبون قد يكون له دين بالعملتين)
+            CurrencyChips(currency) { c ->
+                currency = c
+                for (k in lines.indices) lines[k].fabric?.let { f ->
+                    lines[k] = lines[k].copy(price = f.priceFor(c, customer?.isWholesale == true).takeIf { it > 0 }?.plain() ?: "")
+                }
+            }
+
+            if (amountOnly) Card3D(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("سجّل قائمة شراء الزبون بمبلغها فقط، دون اختيار أصناف، ولن يتأثر المخزون.", style = MaterialTheme.typography.bodySmall)
+                    NumField(listAmount, { listAmount = it }, "مبلغ القائمة بال${currencyName(currency)}", Modifier.fillMaxWidth())
+                    OutlinedTextField(listNote, { listNote = it }, label = { Text("ملاحظة / رقم القائمة (اختياري)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+            } else {
             if (fabrics.isEmpty()) Text("أضف أصنافاً أولاً من تبويب الأصناف.", color = MaterialTheme.colorScheme.error)
 
             lines.forEachIndexed { i, line ->
@@ -159,11 +197,12 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                                 fabrics.forEach { f ->
                                     DropdownMenuItem(
                                         text = { Text("${f.name} ${f.color} (${f.stock.plain()} ${f.unit})") },
+                                        leadingIcon = { FabricThumb(f.imagePath, f.name, 36.dp, decodePx = 96) },
                                         onClick = {
-                                            val p = if (customer?.isWholesale == true) f.wholesalePrice else f.retailPrice
+                                            val p = f.priceFor(currency, customer?.isWholesale == true)
                                             val keep = lines[i].byPiece && f.supportsPieces()
                                             lines[i] = lines[i].copy(
-                                                fabric = f, price = p.plain(), byPiece = keep,
+                                                fabric = f, price = p.takeIf { it > 0 }?.plain() ?: "", byPiece = keep,
                                                 plen = if (f.rollLength > 0) f.rollLength.plain() else if (keep) lines[i].plen else ""
                                             )
                                             open = false
@@ -181,13 +220,13 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                             PieceFields(line.pieces, { lines[i] = lines[i].copy(pieces = it) }, line.plen, { lines[i] = lines[i].copy(plen = it) }, line.meters())
                             NumField(line.price, { lines[i] = lines[i].copy(price = it) }, "سعر المتر", Modifier.fillMaxWidth())
                             if (line.plen.toD() > 0 && line.price.toD() > 0)
-                                Text("سعر القطعة الواحدة: ${(line.plen.toD() * line.price.toD()).fmt()}", style = MaterialTheme.typography.bodySmall)
+                                Text("سعر القطعة الواحدة: ${(line.plen.toD() * line.price.toD()).money(currency)}", style = MaterialTheme.typography.bodySmall)
                         } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             NumField(line.qty, { lines[i] = lines[i].copy(qty = it) }, "الكمية (${line.fabric?.unit ?: ""})", Modifier.weight(1f))
                             NumField(line.price, { lines[i] = lines[i].copy(price = it) }, if (canPieces) "سعر المتر" else "السعر", Modifier.weight(1f))
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("المجموع: ${(line.meters() * line.price.toD()).fmt()}", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                            Text("المجموع: ${(line.meters() * line.price.toD()).money(currency)}", Modifier.weight(1f), fontWeight = FontWeight.Bold)
                             if (lines.size > 1) IconButton(onClick = { lines.removeAt(i) }) {
                                 Icon(Icons.Default.Delete, "حذف", tint = MaterialTheme.colorScheme.error)
                             }
@@ -196,10 +235,11 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                 }
             }
             TextButton(onClick = { lines.add(CartLine()) }) { Text("+ إضافة صنف آخر") }
+            }
 
             Card3D(Modifier.fillMaxWidth(), tint = MaterialTheme.colorScheme.primaryContainer) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("إجمالي الفاتورة: ${total.fmt()}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text("إجمالي الفاتورة: ${total.money(currency)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     if (isCash) {
                         Text("بيع نقدي: يُسجَّل المبلغ مدفوعاً بالكامل")
                     } else {
@@ -207,7 +247,7 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                             NumField(paid, { paid = it }, "المبلغ المدفوع", Modifier.weight(1f))
                             TextButton(onClick = { paid = total.plain() }) { Text("دفع كامل") }
                         }
-                        Text("يُضاف للدين: ${(total - paidVal).fmt()}", color = MaterialTheme.colorScheme.error)
+                        Text("يُضاف للدين: ${(total - paidVal).money(currency)}", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -218,7 +258,7 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                     val after = f.stock + (oldQty[fid] ?: 0.0) - g.sumOf { it.meters() }
                     if (f.minStock > 0 && after <= f.minStock) "${f.name}: سيبقى ${after.plain()} ${f.unit} (حد التنبيه ${f.minStock.plain()})" else null
                 }
-            if (lowWarn.isNotEmpty()) Card3D(
+            if (lowWarn.isNotEmpty() && !amountOnly) Card3D(
                 Modifier.fillMaxWidth(),
                 tint = MaterialTheme.colorScheme.errorContainer
             ) {

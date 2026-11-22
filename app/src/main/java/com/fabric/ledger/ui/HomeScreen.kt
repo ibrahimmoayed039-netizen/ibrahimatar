@@ -170,12 +170,12 @@ fun HomeScreen(
             }
             when (tab) {
                 0 -> {
-                    val totalDebt = balances.values.filter { it > 0 }.sum()
+                    val debtByCur = CURRENCIES.associateWith { c -> balances.values.sumOf { (it[c] ?: 0.0).coerceAtLeast(0.0) } }
                     item {
                         HeroCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp)) {
                                 Text("إجمالي الديون على الزبائن")
-                                Text(totalDebt.fmt(), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                                BalanceLines(debtByCur.filterValues { it > 0.005 })
                             }
                         }
                     }
@@ -187,30 +187,30 @@ fun HomeScreen(
                     }
                     val shownCustomers = customers.filter { c ->
                         matchesQuery(custQuery, c.name, c.phone) && when (custFilter) {
-                            1 -> (balances[c.id] ?: 0.0) > 0.005
+                            1 -> balances[c.id].hasDebt()
                             2 -> c.isWholesale
-                            3 -> (overdue[c.id]?.amount ?: 0.0) > 0.005
+                            3 -> overdue[c.id]?.values?.any { it.amount > 0.005 } == true
                             else -> true
                         }
                     }
                     if (customers.isEmpty()) item { Text("لا يوجد زبائن بعد. اضغط + للإضافة.") }
                     else if (shownCustomers.isEmpty()) item { Text("لا توجد نتائج مطابقة.") }
                     items(shownCustomers, key = { it.id }) { c ->
-                        val b = balances[c.id] ?: 0.0
+                        val b = balances[c.id]
                         Card3D(onClick = { onOpenCustomer(c.id) }, modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(c.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                     val sub = listOfNotNull(c.phone.ifBlank { null }, if (c.isWholesale) "جملة" else null).joinToString(" • ")
                                     if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
-                                    val od = overdue[c.id]
-                                    if (od != null && od.amount > 0.005) {
-                                        Text("⚠ متأخر: ${od.amount.fmt()}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    val odTxt = overdue[c.id].overdueText()
+                                    if (odTxt != null) {
+                                        Text("⚠ متأخر: $odTxt", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                                 Text(
-                                    b.fmt(), fontWeight = FontWeight.Bold,
-                                    color = if (b > 0.005) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    b.balanceText(), fontWeight = FontWeight.Bold,
+                                    color = if (b.hasDebt()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
@@ -236,7 +236,9 @@ fun HomeScreen(
                     item(key = "cat_$cat") { CategoryHeader(cat, grp, totals) }
                     items(grp, key = { it.id }) { f ->
                         Card3D(onClick = { onOpenFabric(f.id) }, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            FabricThumb(f.imagePath, f.name, 72.dp)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                 Text(f.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 val sub = listOf(f.type, f.color).filter { it.isNotBlank() }.joinToString(" • ")
                                 if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
@@ -248,7 +250,9 @@ fun HomeScreen(
                                 Text("مشترى: ${(totals[f.id]?.purchased ?: 0.0).plain()}     مباع: ${(totals[f.id]?.sold ?: 0.0).plain()} ${f.unit}", style = MaterialTheme.typography.bodySmall)
                                 if (f.supportsPieces() && f.rollLength > 0) Text("طول القطعة الكاملة: ${f.rollLength.plain()} متر", style = MaterialTheme.typography.bodySmall)
                                 if (f.minStock > 0) Text("حد التنبيه: ${f.minStock.plain()} ${f.unit}", style = MaterialTheme.typography.bodySmall)
-                                Text("مفرق: ${f.retailPrice.fmt()}    جملة: ${f.wholesalePrice.fmt()}")
+                                Text("مفرق: ${f.retailPrice.money("IQD")}    جملة: ${f.wholesalePrice.money("IQD")}")
+                                if (f.retailPriceUsd > 0 || f.wholesalePriceUsd > 0) Text("مفرق: ${f.retailPriceUsd.money("USD")}    جملة: ${f.wholesalePriceUsd.money("USD")}")
+                            }
                             }
                         }
                     }
@@ -263,11 +267,12 @@ fun HomeScreen(
                                 Column(Modifier.weight(1f)) {
                                     Text(name, fontWeight = FontWeight.Bold)
                                     Text(s.date.dateStr(), style = MaterialTheme.typography.bodySmall)
+                                    if (s.note.isNotBlank()) Text(s.note, style = MaterialTheme.typography.bodySmall)
                                 }
                                 Column(horizontalAlignment = Alignment.End) {
-                                    Text(s.total.fmt(), fontWeight = FontWeight.Bold)
+                                    Text(s.total.money(s.currency), fontWeight = FontWeight.Bold)
                                     val rem = s.total - s.paid
-                                    if (rem > 0.005) Text("متبقي ${rem.fmt()}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    if (rem > 0.005) Text("متبقي ${rem.money(s.currency)}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }
@@ -311,7 +316,7 @@ fun HomeScreen(
                                         Column(Modifier.weight(1f)) {
                                             Text(f?.name ?: "صنف محذوف", fontWeight = FontWeight.Bold)
                                             Text(
-                                                qtyText(p.pieces, p.quantity, f?.unit ?: "") + if (p.supplier.isNotBlank()) "  •  ${p.supplier}" else "",
+                                                qtyText(p.pieces, p.quantity, f?.unit ?: "", p.bales, p.baleType) + if (p.supplier.isNotBlank()) "  •  ${p.supplier}" else "",
                                                 style = MaterialTheme.typography.bodySmall
                                             )
                                             Text(p.date.dateStr(), style = MaterialTheme.typography.bodySmall)

@@ -1,6 +1,7 @@
 package com.fabric.ledger.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,6 +29,8 @@ fun FabricScreen(vm: MainViewModel, id: Long, onBack: () -> Unit) {
     var addDlg by remember { mutableStateOf(false) }
     var editPurchase by remember { mutableStateOf<Purchase?>(null) }
     var editDlg by remember { mutableStateOf(false) }
+    var openDlg by remember { mutableStateOf(false) }
+    var imgDlg by remember { mutableStateOf(false) }
 
     val f = fabrics.find { it.id == id }
     if (f == null) { Box(Modifier.fillMaxSize()); return }
@@ -52,6 +55,7 @@ fun FabricScreen(vm: MainViewModel, id: Long, onBack: () -> Unit) {
         ) {
             item {
                 HeroCard(Modifier.fillMaxWidth()) {
+                    if (f.imagePath.isNotBlank()) FabricThumb(f.imagePath, f.name, 96.dp, Modifier.clickable { imgDlg = true }, decodePx = 400)
                     val sub = listOf(f.type, f.color).filter { it.isNotBlank() }.joinToString(" • ")
                     if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall)
                     Text("المخزون الحالي")
@@ -76,6 +80,9 @@ fun FabricScreen(vm: MainViewModel, id: Long, onBack: () -> Unit) {
                     }
                 }
             }
+            if (f.sealedBalesEff() > 0) item {
+                Button3D(onClick = { openDlg = true }, modifier = Modifier.fillMaxWidth()) { Text("فتح بالة (${f.sealedBalesEff().plain()} مغلقة)") }
+            }
             item {
                 Button3D(onClick = { addDlg = true }, modifier = Modifier.fillMaxWidth()) { Text("+ تسجيل شراء") }
             }
@@ -88,9 +95,9 @@ fun FabricScreen(vm: MainViewModel, id: Long, onBack: () -> Unit) {
                             Text("شراء", fontWeight = FontWeight.Bold)
                             Text(p.date.dateStr(), style = MaterialTheme.typography.bodySmall)
                             if (p.note.isNotBlank()) Text(p.note, style = MaterialTheme.typography.bodySmall)
-                            if (p.unitCost > 0) Text("سعر الوحدة: ${p.unitCost.money(p.currency)}  •  الإجمالي: ${p.total.money(p.currency)}", style = MaterialTheme.typography.bodySmall)
+                            if (p.unitCost > 0) Text("سعر ${if (f.supportsPieces()) "المتر" else "الوحدة"}: ${p.unitCost.money(p.currency)}  •  الإجمالي: ${p.total.money(p.currency)}", style = MaterialTheme.typography.bodySmall)
                         }
-                        Text("+ " + qtyText(p.pieces, p.quantity, f.unit), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Text("+ " + qtyText(p.pieces, p.quantity, f.unit, p.bales, p.baleType), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
@@ -110,6 +117,11 @@ fun FabricScreen(vm: MainViewModel, id: Long, onBack: () -> Unit) {
             onDismiss = { editPurchase = null }
         )
     }
+    if (openDlg) OpenBaleDialog(
+        f, onDismiss = { openDlg = false },
+        onConfirm = { k -> openDlg = false; vm.openBales(id, k) { done -> toast(done > 0, "تم فتح ${done.plain()} ${f.baleName()}") } }
+    )
+    if (imgDlg) FabricImageDialog(f.imagePath, f.name) { imgDlg = false }
     if (editDlg) FabricDialog(
         initial = f,
         onSave = { vm.saveFabric(it); editDlg = false },

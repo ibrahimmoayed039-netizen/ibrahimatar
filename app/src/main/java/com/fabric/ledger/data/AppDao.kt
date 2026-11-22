@@ -19,6 +19,22 @@ abstract class AppDao {
     @Query("UPDATE fabrics SET stock = stock + :qty WHERE id = :id")
     abstract suspend fun addStock(id: Long, qty: Double)
 
+    @Query("UPDATE fabrics SET sealedBales = MAX(0, sealedBales + :bales), sealedMeters = MAX(0, sealedMeters + :meters) WHERE id = :id")
+    abstract suspend fun addSealed(id: Long, bales: Double, meters: Double)
+    @Query("SELECT * FROM fabrics WHERE id = :id")
+    abstract suspend fun fabricById(id: Long): Fabric?
+
+    /** فتح بالات: تتحول من مغلقة إلى قطع مفتوحة؛ المخزون الكلي بالأمتار لا يتغير. يرجع عدد البالات التي فُتحت فعلاً */
+    @Transaction
+    open suspend fun openBales(id: Long, n: Double): Double {
+        val f = fabricById(id) ?: return 0.0
+        val avail = if (f.sealedMeters > f.stock && f.sealedMeters > 0) kotlin.math.floor(f.sealedBales * f.stock / f.sealedMeters) else f.sealedBales
+        val k = n.coerceAtMost(avail)
+        if (k <= 0.0 || f.sealedBales <= 0.0) return 0.0
+        addSealed(id, -k, -(f.sealedMeters / f.sealedBales * k))
+        return k
+    }
+
     // ---------- المشتريات ----------
     @Query("SELECT * FROM purchases ORDER BY date DESC")
     abstract fun purchases(): Flow<List<Purchase>>
@@ -40,14 +56,19 @@ abstract class AppDao {
     open suspend fun addPurchase(p: Purchase) {
         insertPurchase(p)
         addStock(p.fabricId, p.quantity)
+        if (p.bales > 0) addSealed(p.fabricId, p.bales, p.quantity)
     }
 
     /** تعديل شراء: تُسترجع الكمية القديمة ثم تُضاف الجديدة */
     @Transaction
     open suspend fun editPurchase(p: Purchase) {
-        purchaseById(p.id)?.let { addStock(it.fabricId, -it.quantity) }
+        purchaseById(p.id)?.let {
+            addStock(it.fabricId, -it.quantity)
+            if (it.bales > 0) addSealed(it.fabricId, -it.bales, -it.quantity)
+        }
         upsertPurchase(p)
         addStock(p.fabricId, p.quantity)
+        if (p.bales > 0) addSealed(p.fabricId, p.bales, p.quantity)
     }
 
     /** حذف شراء: تُخصم كميته من المخزون */
@@ -55,6 +76,7 @@ abstract class AppDao {
     open suspend fun removePurchase(id: Long) {
         val old = purchaseById(id) ?: return
         addStock(old.fabricId, -old.quantity)
+        if (old.bales > 0) addSealed(old.fabricId, -old.bales, -old.quantity)
         deletePurchaseRow(id)
     }
 

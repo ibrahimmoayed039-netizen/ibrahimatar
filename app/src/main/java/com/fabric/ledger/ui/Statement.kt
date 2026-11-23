@@ -76,6 +76,23 @@ object Share {
         context.startActivity(Intent.createChooser(build(null), "مشاركة كشف الحساب"))
     }
 
+    /** مشاركة ملف النسخة الاحتياطية (zip) عبر واتساب، وإلا قائمة المشاركة العامة */
+    fun zip(context: Context, file: File, message: String) {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        fun build(pkg: String?) = Intent(Intent.ACTION_SEND).apply {
+            type = "application/zip"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_TEXT, message)
+            clipData = ClipData.newRawUri("", uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (pkg != null) setPackage(pkg)
+        }
+        for (pkg in listOf("com.whatsapp", "com.whatsapp.w4b")) {
+            try { context.startActivity(build(pkg)); return } catch (_: ActivityNotFoundException) { }
+        }
+        context.startActivity(Intent.createChooser(build(null), "إرسال النسخة الاحتياطية"))
+    }
+
     /** رسالة نصية: مباشرة إلى رقم الزبون إن عُرف، وإلا قائمة المشاركة */
     fun whatsappText(context: Context, number: String, message: String) {
         if (number.isNotEmpty()) {

@@ -103,6 +103,23 @@ abstract class AppDao {
     abstract fun customers(): Flow<List<Customer>>
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     abstract suspend fun upsertCustomer(c: Customer)
+    /** آخر سعر بيع به هذا الصنف لهذا الزبون بنفس العملة (null إن لم يشترِه من قبل) */
+    @Query("SELECT si.unitPrice FROM sale_items si INNER JOIN sales s ON s.id = si.saleId WHERE s.customerId = :cid AND si.fabricId = :fid AND s.currency = :cur ORDER BY s.date DESC LIMIT 1")
+    abstract suspend fun lastPrice(cid: Long, fid: Long, cur: String): Double?
+    @Query("SELECT id FROM sales WHERE customerId = :cid")
+    abstract suspend fun saleIdsOf(cid: Long): List<Long>
+    @Query("DELETE FROM payments WHERE customerId = :cid")
+    abstract suspend fun deletePaymentsOf(cid: Long)
+    @Query("DELETE FROM customers WHERE id = :cid")
+    abstract suspend fun deleteCustomerRow(cid: Long)
+
+    /** حذف زبون: تُحذف فواتيره (وتعود كمياتها للمخزن) ودفعاته ثم الزبون */
+    @Transaction
+    open suspend fun deleteCustomer(cid: Long) {
+        saleIdsOf(cid).forEach { deleteSale(it) }
+        deletePaymentsOf(cid)
+        deleteCustomerRow(cid)
+    }
 
     // ---------- الفواتير ----------
     @Query("SELECT * FROM sales ORDER BY date DESC")

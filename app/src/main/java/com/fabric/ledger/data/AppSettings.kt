@@ -22,6 +22,23 @@ class AppSettings(context: Context) {
         get() = p.getString("countryCode", "") ?: ""
         set(v) = p.edit().putString("countryCode", v).apply()
 
+    // ---------- النسخ الاحتياطي التلقائي ----------
+    var autoBackup: Boolean
+        get() = p.getBoolean("autoBackup", false)
+        set(v) = p.edit().putBoolean("autoBackup", v).apply()
+    var backupMode: String
+        get() = p.getString("backupMode", "folder") ?: "folder"
+        set(v) = p.edit().putString("backupMode", v).apply()
+    var backupTree: String
+        get() = p.getString("backupTree", "") ?: ""
+        set(v) = p.edit().putString("backupTree", v).apply()
+    var lastBackup: Long
+        get() = p.getLong("lastBackup", 0L)
+        set(v) = p.edit().putLong("lastBackup", v).apply()
+    var backupSnooze: Long
+        get() = p.getLong("backupSnooze", 0L)
+        set(v) = p.edit().putLong("backupSnooze", v).apply()
+
     // ---------- قفل التطبيق (رقم سري) ----------
     private val pinHash: String get() = p.getString("pinHash", "") ?: ""
     private val pinSalt: String get() = p.getString("pinSalt", "") ?: ""

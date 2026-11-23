@@ -1,6 +1,22 @@
 package com.fabric.ledger.ui
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import com.fabric.ledger.data.AutoBackup
+import com.fabric.ledger.data.AutoBackupState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.horizontalScroll
@@ -55,6 +71,13 @@ fun Fabric.sealedMetersEff(): Double =
 
 /** الأمتار المفتوحة (خارج البالات المغلقة) */
 fun Fabric.looseMeters(): Double = (stock - sealedMetersEff()).coerceAtLeast(0.0)
+
+/** وصف مختصر لطريقة الصنف: بالة (قطع × طول) أو طول */
+fun Fabric.kindText(): String? = when {
+    piecesPerBale > 0 && rollLength > 0 -> "بالة: ${piecesPerBale.plain()} قطعة × ${rollLength.plain()} متر"
+    rollLength > 0 -> "طول: ${rollLength.plain()} متر"
+    else -> null
+}
 
 fun Fabric.baleName(): String = if (baleType.isBlank()) "بالة" else "بالة $baleType"
 
@@ -134,19 +157,24 @@ fun FabricDialog(initial: Fabric?, onSave: (Fabric) -> Unit, onDelete: (() -> Un
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var type by remember { mutableStateOf(initial?.type ?: "") }
     var color by remember { mutableStateOf(initial?.color ?: "") }
-    var unit by remember { mutableStateOf(initial?.unit ?: "متر") }
-    var retail by remember { mutableStateOf(initial?.retailPrice?.plain() ?: "") }
-    var wholesale by remember { mutableStateOf(initial?.wholesalePrice?.plain() ?: "") }
+    // 0 = بالة، 1 = طول  (الصنف ذو القطع داخل البالة = بالة، وغيره = طول)
+    var kind by remember { mutableIntStateOf(if (initial == null || initial.piecesPerBale > 0) 0 else 1) }
+    var perBale by remember { mutableStateOf(initial?.piecesPerBale?.takeIf { it > 0 }?.plain() ?: "") }
+    var rollLen by remember { mutableStateOf(initial?.rollLength?.takeIf { it > 0 }?.plain() ?: "") }
+    var buyCur by remember { mutableStateOf(initial?.purchaseCurrency ?: "USD") }
+    var buyPrice by remember { mutableStateOf(initial?.purchasePrice?.takeIf { it > 0 }?.plain() ?: "") }
+    var qty by remember { mutableStateOf("") }   // عدد البالات أو عدد الأطوال
+    var stock by remember { mutableStateOf(initial?.stock?.plain() ?: "") }   // تصحيح يدوي عند التعديل فقط
+    var minStock by remember { mutableStateOf(initial?.minStock?.takeIf { it > 0 }?.plain() ?: "") }
+    // أسعار البيع اختيارية: السعر يتغير عادة من بيع لآخر فيُكتب عند كل عملية بيع
+    var retail by remember { mutableStateOf(initial?.retailPrice?.takeIf { it > 0 }?.plain() ?: "") }
+    var wholesale by remember { mutableStateOf(initial?.wholesalePrice?.takeIf { it > 0 }?.plain() ?: "") }
     var retailUsd by remember { mutableStateOf(initial?.retailPriceUsd?.takeIf { it > 0 }?.plain() ?: "") }
     var wholesaleUsd by remember { mutableStateOf(initial?.wholesalePriceUsd?.takeIf { it > 0 }?.plain() ?: "") }
-    var stock by remember { mutableStateOf(initial?.stock?.plain() ?: "") }
-    var minStock by remember { mutableStateOf(initial?.minStock?.plain() ?: "") }
-    var rollLen by remember { mutableStateOf(initial?.rollLength?.takeIf { it > 0 }?.plain() ?: "") }
-    var baleType by remember { mutableStateOf(initial?.baleType ?: "") }
-    var perBale by remember { mutableStateOf(initial?.piecesPerBale?.takeIf { it > 0 }?.plain() ?: "") }
-    var buyPrice by remember { mutableStateOf(initial?.purchasePrice?.takeIf { it > 0 }?.plain() ?: "") }
-    var buyCur by remember { mutableStateOf(initial?.purchaseCurrency ?: "IQD") }
-    var baleCount by remember { mutableStateOf("") }
+    var showSell by remember {
+        mutableStateOf(initial != null && listOf(initial.retailPrice, initial.wholesalePrice, initial.retailPriceUsd, initial.wholesalePriceUsd).any { it > 0 })
+    }
+    var err by remember { mutableStateOf<String?>(null) }
     var imagePath by remember { mutableStateOf(initial?.imagePath ?: "") }
     val created = remember { mutableStateListOf<String>() }
     /** حذف الصور الجديدة غير المستخدمة (ملفات أُنشئت ثم أُلغيت) */
@@ -154,66 +182,113 @@ fun FabricDialog(initial: Fabric?, onSave: (Fabric) -> Unit, onDelete: (() -> Un
     val dismiss = { cleanup(initial?.imagePath ?: ""); onDismiss() }
     var confirmDel by remember { mutableStateOf(false) }
 
+    val perB = perBale.toD()
+    val len = rollLen.toD()
+    val q = qty.toD()
+    /** الكمية الكلية بالمتر محسوبة من العدد المكتوب (بالات أو أطوال) */
+    val autoStock: Double? = when {
+        q <= 0 || len <= 0 -> null
+        kind == 0 -> if (perB > 0) (q * perB * len).r3() else null
+        else -> (q * len).r3()
+    }
+
     AlertDialog(
         onDismissRequest = dismiss,
         title = { Text(if (initial == null) "إضافة صنف" else "تعديل صنف") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FabricImagePicker(imagePath, name) { np -> if (np.isNotBlank()) created.add(np); imagePath = np }
-                OutlinedTextField(name, { name = it }, label = { Text("اسم القماش") }, singleLine = true)
+                OutlinedTextField(name, { name = it; err = null }, label = { Text("اسم القماش") }, singleLine = true)
                 OutlinedTextField(type, { type = it }, label = { Text("النوع (قطن، حرير، كتان...)") }, singleLine = true)
                 OutlinedTextField(color, { color = it }, label = { Text("اللون") }, singleLine = true)
+
+                Text("طريقة الشراء والتخزين", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("متر", "ثوب").forEach { u ->
-                        FilterChip(selected = unit == u, onClick = { unit = u }, label = { Text(u) })
-                    }
+                    FilterChip(selected = kind == 0, onClick = { kind = 0; err = null }, label = { Text("بالة") })
+                    FilterChip(selected = kind == 1, onClick = { kind = 1; err = null }, label = { Text("طول") })
                 }
-                NumField(retail, { retail = it }, "سعر المفرق بالدينار")
-                NumField(wholesale, { wholesale = it }, "سعر الجملة بالدينار")
-                NumField(retailUsd, { retailUsd = it }, "سعر المفرق بالدولار (اختياري)")
-                NumField(wholesaleUsd, { wholesaleUsd = it }, "سعر الجملة بالدولار (اختياري)")
-                if (unit == "متر") {
-                    NumField(rollLen, { rollLen = it }, "طول القطعة الكاملة بالمتر (مثلاً 50) — للبيع والشراء بالقطعة")
-                    OutlinedTextField(baleType, { baleType = it }, label = { Text("نوع البالة (مثلاً: بالة كبيرة)") }, singleLine = true)
-                    NumField(perBale, { perBale = it }, "عدد القطع داخل البالة الواحدة")
+                if (initial?.unit == "ثوب") {
+                    Text(
+                        "كان هذا الصنف مسجلاً بوحدة «ثوب». بعد الحفظ تُعتبر الكمية بالأمتار، فراجعها.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
+                    )
                 }
+                if (kind == 0) {
+                    NumField(perBale, { perBale = it; err = null }, "عدد القطع داخل البالة")
+                    NumField(rollLen, { rollLen = it; err = null }, "طول القطعة الواحدة بالمتر")
+                } else {
+                    NumField(rollLen, { rollLen = it; err = null }, "عدد الأمتار في الطول الواحد")
+                }
+
                 Text("سعر الشراء", fontWeight = FontWeight.Bold)
                 CurrencyChips(buyCur) { buyCur = it }
-                NumField(buyPrice, { buyPrice = it }, "سعر شراء ${if (unit == "متر") "المتر" else "الوحدة"} بال${currencyName(buyCur)}")
-                if (unit == "متر" && buyPrice.toD() > 0 && rollLen.toD() > 0) {
-                    val pieceCost = buyPrice.toD() * rollLen.toD()
-                    Text("سعر شراء القطعة: ${pieceCost.money(buyCur)}", style = MaterialTheme.typography.bodySmall)
-                    if (perBale.toD() > 0) Text("سعر شراء البالة: ${(pieceCost * perBale.toD()).money(buyCur)}", style = MaterialTheme.typography.bodySmall)
+                NumField(buyPrice, { buyPrice = it }, "سعر شراء المتر بال${currencyName(buyCur)}")
+                if (buyPrice.toD() > 0 && len > 0) {
+                    val pieceCost = buyPrice.toD() * len
+                    if (kind == 0) {
+                        Text("سعر شراء القطعة: ${pieceCost.money(buyCur)}", style = MaterialTheme.typography.bodySmall)
+                        if (perB > 0) Text("سعر شراء البالة: ${(pieceCost * perB).money(buyCur)}", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text("سعر شراء الطول الواحد: ${pieceCost.money(buyCur)}", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                if (unit == "متر" && perBale.toD() > 0 && rollLen.toD() > 0) {
-                    NumField(baleCount, {
-                        baleCount = it
-                        stock = (it.toD() * perBale.toD() * rollLen.toD()).r3().plain()
-                    }, "عدد البالات في المخزن — تحسب الكمية تلقائياً")
+
+                NumField(qty, { qty = it; err = null }, if (kind == 0) "عدد البالات" else "الكمية (عدد الأطوال)")
+                if (autoStock != null) {
+                    Text("= ${autoStock.plain()} متر", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 }
-                NumField(stock, { stock = it }, "الكمية في المخزن ($unit)")
-                NumField(minStock, { minStock = it }, "نبّهني عند نزول الكمية إلى ($unit) — اتركه فارغاً لإلغاء التنبيه")
+                if (initial != null) {
+                    Text(
+                        "المخزون الحالي: ${initial.stock.plain()} متر. اترك الكمية أعلاه فارغة لإبقائه، أو اكتب عدداً جديداً ليحل محله.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    NumField(stock, { stock = it }, "تصحيح المخزون يدوياً بالمتر (اختياري)")
+                }
+                NumField(minStock, { minStock = it }, "نبّهني عند نزول الكمية إلى (متر) — اتركه فارغاً لإلغاء التنبيه")
+
+                TextButton(onClick = { showSell = !showSell }) {
+                    Text(if (showSell) "إخفاء أسعار البيع" else "أسعار البيع الافتراضية (اختياري)")
+                }
+                if (showSell) {
+                    Text(
+                        "سعر البيع يختلف عادة من بيع لآخر. اترك هذه الحقول فارغة واكتب السعر عند كل عملية بيع.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    NumField(retail, { retail = it }, "سعر المفرق بالدينار (اختياري)")
+                    NumField(wholesale, { wholesale = it }, "سعر الجملة بالدينار (اختياري)")
+                    NumField(retailUsd, { retailUsd = it }, "سعر المفرق بالدولار (اختياري)")
+                    NumField(wholesaleUsd, { wholesaleUsd = it }, "سعر الجملة بالدولار (اختياري)")
+                }
+                err?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                if (name.isNotBlank()) {
-                    cleanup(imagePath)
-                    initial?.imagePath?.takeIf { it.isNotBlank() && it != imagePath }?.let { deleteFabricImage(it) }
-                    onSave(
-                    Fabric(
-                        id = initial?.id ?: 0, name = name.trim(), type = type.trim(), color = color.trim(),
-                        unit = unit, retailPrice = retail.toD(), wholesalePrice = wholesale.toD(), stock = stock.toD(), minStock = minStock.toD(),
-                        rollLength = if (unit == "متر") rollLen.toD() else 0.0,
-                        retailPriceUsd = retailUsd.toD(), wholesalePriceUsd = wholesaleUsd.toD(),
-                        baleType = if (unit == "متر") baleType.trim() else "",
-                        piecesPerBale = if (unit == "متر") perBale.toD() else 0.0,
-                        purchasePrice = buyPrice.toD(), purchaseCurrency = buyCur,
-                        sealedBales = if (unit == "متر" && baleCount.toD() > 0) baleCount.toD() else initial?.sealedBales ?: 0.0,
-                        sealedMeters = if (unit == "متر" && baleCount.toD() > 0) baleCount.toD() * perBale.toD() * rollLen.toD() else initial?.sealedMeters ?: 0.0,
-                        imagePath = imagePath
-                    )
-                    )
+                when {
+                    name.isBlank() -> err = "اكتب اسم القماش"
+                    kind == 0 && perB <= 0 -> err = "اكتب عدد القطع داخل البالة"
+                    kind == 0 && len <= 0 -> err = "اكتب طول القطعة الواحدة بالمتر"
+                    kind == 1 && q > 0 && len <= 0 -> err = "اكتب عدد الأمتار في الطول الواحد"
+                    else -> {
+                        cleanup(imagePath)
+                        initial?.imagePath?.takeIf { it.isNotBlank() && it != imagePath }?.let { deleteFabricImage(it) }
+                        onSave(
+                            Fabric(
+                                id = initial?.id ?: 0, name = name.trim(), type = type.trim(), color = color.trim(),
+                                unit = "متر",
+                                retailPrice = retail.toD(), wholesalePrice = wholesale.toD(),
+                                retailPriceUsd = retailUsd.toD(), wholesalePriceUsd = wholesaleUsd.toD(),
+                                stock = autoStock ?: stock.toD(), minStock = minStock.toD(),
+                                rollLength = len,
+                                baleType = if (kind == 0) initial?.baleType ?: "" else "",
+                                piecesPerBale = if (kind == 0) perB else 0.0,
+                                purchasePrice = buyPrice.toD(), purchaseCurrency = buyCur,
+                                sealedBales = if (kind == 0) { if (autoStock != null) q else initial?.sealedBales ?: 0.0 } else 0.0,
+                                sealedMeters = if (kind == 0) { if (autoStock != null) autoStock else initial?.sealedMeters ?: 0.0 } else 0.0,
+                                imagePath = imagePath
+                            )
+                        )
+                    }
                 }
             }) { Text("حفظ") }
         },
@@ -233,13 +308,13 @@ fun FabricDialog(initial: Fabric?, onSave: (Fabric) -> Unit, onDelete: (() -> Un
 }
 
 @Composable
-fun CustomerDialog(onSave: (Customer) -> Unit, onDismiss: () -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var phone by remember { mutableStateOf("") }
-    var wholesale by remember { mutableStateOf(false) }
+fun CustomerDialog(onSave: (Customer) -> Unit, onDismiss: () -> Unit, initial: Customer? = null) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var phone by remember { mutableStateOf(initial?.phone ?: "") }
+    var wholesale by remember { mutableStateOf(initial?.isWholesale ?: false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("إضافة زبون") },
+        title = { Text(if (initial == null) "إضافة زبون" else "تعديل الزبون") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("الاسم") }, singleLine = true)
@@ -247,7 +322,7 @@ fun CustomerDialog(onSave: (Customer) -> Unit, onDismiss: () -> Unit) {
                     phone, { phone = it }, label = { Text("رقم الهاتف") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
                 )
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(checked = wholesale, onCheckedChange = { wholesale = it })
                     Spacer(Modifier.width(8.dp))
                     Text("زبون جملة")
@@ -256,7 +331,7 @@ fun CustomerDialog(onSave: (Customer) -> Unit, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                if (name.isNotBlank()) onSave(Customer(name = name.trim(), phone = phone.trim(), isWholesale = wholesale))
+                if (name.isNotBlank()) onSave(Customer(id = initial?.id ?: 0, name = name.trim(), phone = phone.trim(), isWholesale = wholesale))
             }) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
@@ -310,6 +385,48 @@ fun PaymentDialog(
     )
 }
 
+/** حالة الفاتورة: نقداً (مسدَّدة كاملة) / أجل (لم يُدفع شيء) / جزئي (دُفع جزء) */
+class SaleStatus(val label: String, val color: Color)
+
+fun saleStatus(total: Double, paid: Double): SaleStatus = when {
+    total - paid <= 0.005 -> SaleStatus("نقداً", Color(0xFF2E7D32))
+    paid <= 0.005 -> SaleStatus("أجل", Copper)
+    else -> SaleStatus("جزئي", Color(0xFF8A5A00))
+}
+
+@Composable
+fun StatusBadge(s: SaleStatus) {
+    Box(Modifier.clip(RoundedCornerShape(50)).background(s.color).padding(horizontal = 12.dp, vertical = 3.dp)) {
+        Text(s.label, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable
+private fun InvoiceRow(cells: List<String>, bold: Boolean, bg: Color) {
+    val w = listOf(2.2f, 1.8f, 1.4f, 1.7f)
+    Row(Modifier.fillMaxWidth().background(bg).padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        cells.forEachIndexed { i, t ->
+            Text(
+                t, Modifier.weight(w[i]), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                style = MaterialTheme.typography.bodySmall, textAlign = if (i == 0) TextAlign.Start else TextAlign.Center
+            )
+        }
+    }
+}
+
+/** جدول القائمة: الصنف | الكمية | السعر | المبلغ */
+@Composable
+fun InvoiceTable(rows: List<List<String>>) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))) {
+        InvoiceRow(listOf("الصنف", "الكمية", "السعر", "المبلغ"), true, MaterialTheme.colorScheme.primaryContainer)
+        rows.forEachIndexed { i, r -> InvoiceRow(r, false, if (i % 2 == 0) Color.White else Mist) }
+    }
+}
+
+/** نص الكمية داخل خلية الجدول (سطران إن كانت بالقطعة) */
+fun qtyCell(pieces: Double, quantity: Double, unit: String): String =
+    if (pieces > 0.0) "${pieces.plain()} قطعة\n(${quantity.plain()} $unit)" else "${quantity.plain()} $unit"
+
 @Composable
 fun SaleDetailDialog(
     vm: MainViewModel, sale: Sale, customerName: String,
@@ -318,34 +435,136 @@ fun SaleDetailDialog(
     val flow = remember(sale.id) { vm.itemsOf(sale.id) }
     val items by flow.collectAsStateWithLifecycle(initialValue = emptyList())
     var confirmDel by remember { mutableStateOf(false) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("فاتورة $customerName") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(sale.date.dateStr(), style = MaterialTheme.typography.bodySmall)
-                HorizontalDivider()
-                if (items.isEmpty()) Text(if (sale.note.isBlank()) "قائمة بمبلغ فقط (بدون أصناف)" else "قائمة بمبلغ فقط: ${sale.note}")
-                items.forEach {
-                    Text("${it.fabricName}: ${qtyText(it.pieces, it.quantity, it.unit)} × ${it.unitPrice.money(sale.currency)} = ${(it.quantity * it.unitPrice).money(sale.currency)}")
+    val cur = sale.currency
+    val rem = (sale.total - sale.paid).coerceAtLeast(0.0)
+    val st = saleStatus(sale.total, sale.paid)
+    val frac = if (sale.total > 0.0) (sale.paid / sale.total).coerceIn(0.0, 1.0).toFloat() else 1f
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(shape = RoundedCornerShape(24.dp), color = Color.White, modifier = Modifier.fillMaxWidth(0.96f).heightIn(max = 640.dp)) {
+            Column {
+                // الترويسة: اسم الزبون + التاريخ + ختم الحالة (نقداً / أجل / جزئي)
+                Row(
+                    Modifier.fillMaxWidth().background(Brush.horizontalGradient(listOf(Teal, TealLight))).padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("فاتورة", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
+                        Text(customerName.ifBlank { "بيع نقدي" }, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                        Text(sale.date.dateStr(), color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
+                    }
+                    StatusBadge(st)
                 }
-                HorizontalDivider()
-                Text("الإجمالي: ${sale.total.money(sale.currency)}", fontWeight = FontWeight.Bold)
-                Text("المدفوع: ${sale.paid.money(sale.currency)}")
-                Text("المتبقي: ${(sale.total - sale.paid).money(sale.currency)}", color = MaterialTheme.colorScheme.error)
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("إغلاق") } },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onEdit) { Text("تعديل") }
-                TextButton(onClick = { confirmDel = true }) { Text("حذف", color = MaterialTheme.colorScheme.error) }
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("العملة: ${currencyName(cur)}", style = MaterialTheme.typography.bodySmall)
+                    if (items.isEmpty()) Text(if (sale.note.isBlank()) "قائمة بمبلغ فقط (بدون أصناف)" else "قائمة بمبلغ فقط: ${sale.note}")
+                    else InvoiceTable(items.map {
+                        listOf(it.fabricName, qtyCell(it.pieces, it.quantity, it.unit), it.unitPrice.num(cur), (it.quantity * it.unitPrice).num(cur))
+                    })
+                    // الإجمالي والمدفوع والمتبقي + شريط نسبة التسديد
+                    Card3D(Modifier.fillMaxWidth(), tint = MaterialTheme.colorScheme.primaryContainer) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("الإجمالي", fontWeight = FontWeight.Bold); Text(sale.total.money(cur), fontWeight = FontWeight.Bold)
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("المدفوع"); Text(sale.paid.money(cur))
+                            }
+                            Box(Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFFD3E1E3))) {
+                                Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(RoundedCornerShape(5.dp)).background(st.color))
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("المتبقي (دين)", fontWeight = FontWeight.Bold)
+                                Text(rem.money(cur), fontWeight = FontWeight.Bold, color = if (rem > 0.005) MaterialTheme.colorScheme.error else Color(0xFF2E7D32))
+                            }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row {
+                        TextButton(onClick = onEdit) { Text("تعديل") }
+                        TextButton(onClick = { confirmDel = true }) { Text("حذف", color = MaterialTheme.colorScheme.error) }
+                    }
+                    TextButton(onClick = onDismiss) { Text("إغلاق") }
+                }
             }
         }
-    )
+    }
     if (confirmDel) ConfirmDialog(
         "حذف هذه الفاتورة؟ ستعود كمياتها إلى المخزن ويُخصم دينها من الزبون.",
         onYes = onDelete, onDismiss = { confirmDel = false }
+    )
+}
+
+@Composable
+fun AutoBackupDialog(
+    state: AutoBackupState,
+    onSave: (Boolean, String, String) -> Unit,
+    onShareNow: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(state.enabled) }
+    var mode by remember { mutableStateOf(state.mode) }
+    var tree by remember { mutableStateOf(state.tree) }
+    var err by remember { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            tree = uri.toString(); err = ""
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("النسخ الاحتياطي التلقائي") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                    Spacer(Modifier.width(8.dp))
+                    Text("نسخة أسبوعية تلقائية")
+                }
+                if (enabled) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = mode == "folder", onClick = { mode = "folder" }, label = { Text("إلى مجلد") })
+                        FilterChip(selected = mode == "whatsapp", onClick = { mode = "whatsapp" }, label = { Text("إلى واتساب") })
+                    }
+                    if (mode == "folder") {
+                        Text(
+                            "تُحفظ نسخة كل أسبوع صامتةً عند فتح التطبيق، ويُبقى آخر 4 نسخ فقط. اختر مجلداً يُزامَن مع Google Drive لتصل النسخة لحسابك أيضاً.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedButton(onClick = { picker.launch(null) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (tree.isBlank()) "اختيار المجلد" else "المجلد: ${AutoBackup.folderName(context, Uri.parse(tree))}")
+                        }
+                    } else {
+                        Text(
+                            "كل أسبوع يظهر تذكير عند فتح التطبيق، وبضغطة واحدة تُرسل النسخة إلى واتساب (مثلاً إلى محادثتك مع نفسك أو مجموعة خاصة بك).",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (err.isNotBlank()) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    if (state.last > 0L) "آخر نسخة تلقائية: ${state.last.dateStr()}" else "لم تُحفظ نسخة تلقائية بعد",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedButton(onClick = onShareNow, modifier = Modifier.fillMaxWidth()) { Text("إرسال نسخة الآن عبر واتساب") }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (enabled && mode == "folder" && tree.isBlank()) err = "اختر المجلد أولاً"
+                else onSave(enabled, mode, tree)
+            }) { Text("حفظ") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
     )
 }
 

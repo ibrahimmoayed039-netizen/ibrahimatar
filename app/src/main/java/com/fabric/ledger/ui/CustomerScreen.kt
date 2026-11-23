@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +43,8 @@ fun CustomerScreen(
     var payDlg by remember { mutableStateOf(false) }
     var editPay by remember { mutableStateOf<Payment?>(null) }
     var saleView by remember { mutableStateOf<Sale?>(null) }
+    var editDlg by remember { mutableStateOf(false) }
+    var delDlg by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -60,7 +64,11 @@ fun CustomerScreen(
         topBar = {
             GradientTopBar(
                 title = { Text(customer?.name ?: "") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "رجوع") } }
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "رجوع") } },
+                actions = {
+                    IconButton(onClick = { editDlg = true }, enabled = customer != null) { Icon(Icons.Default.Edit, "تعديل الزبون") }
+                    IconButton(onClick = { delDlg = true }, enabled = customer != null) { Icon(Icons.Default.Delete, "حذف الزبون") }
+                }
             )
         }
     ) { pad ->
@@ -143,6 +151,7 @@ fun CustomerScreen(
                             Column(horizontalAlignment = Alignment.End) {
                                 Text(e.s.total.money(e.s.currency), fontWeight = FontWeight.Bold)
                                 Text("مدفوع ${e.s.paid.money(e.s.currency)}", style = MaterialTheme.typography.bodySmall)
+                                StatusBadge(saleStatus(e.s.total, e.s.paid))
                             }
                         }
                     }
@@ -165,6 +174,22 @@ fun CustomerScreen(
         }
     }
 
+    if (editDlg && customer != null) CustomerDialog(
+        initial = customer,
+        onSave = { vm.saveCustomer(it); editDlg = false },
+        onDismiss = { editDlg = false }
+    )
+    if (delDlg && customer != null) ConfirmDialog(
+        "حذف الزبون «${customer.name}» نهائياً؟ سيُحذف معه كل فواتيره ودفعاته، وتعود كميات فواتيره إلى المخزن.",
+        onYes = {
+            delDlg = false
+            vm.deleteCustomer(id) { ok ->
+                Toast.makeText(context, if (ok) "تم حذف الزبون" else "تعذر الحذف", Toast.LENGTH_SHORT).show()
+                if (ok) onBack()
+            }
+        },
+        onDismiss = { delDlg = false }
+    )
     if (payDlg) PaymentDialog(
         initial = null,
         defaultCurrency = defCur,

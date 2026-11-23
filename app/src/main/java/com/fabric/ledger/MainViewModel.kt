@@ -70,6 +70,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _grace.value = grace; _shop.value = shop; _cc.value = cc
     }
 
+    // ---------- النسخ الاحتياطي التلقائي ----------
+    private fun abState() = AutoBackupState(settings.autoBackup, settings.backupMode, settings.backupTree, settings.lastBackup)
+    private val _ab = MutableStateFlow(abState())
+    val autoBackup: StateFlow<AutoBackupState> = _ab
+
+    fun saveAutoBackup(enabled: Boolean, mode: String, tree: String) {
+        settings.autoBackup = enabled; settings.backupMode = mode; settings.backupTree = tree; settings.backupSnooze = 0L
+        _ab.value = abState()
+    }
+
+    /** عند فتح التطبيق: إن مضى أسبوع تُحفظ نسخة في المجلد صامتاً، أو يُطلب عرض تذكير واتساب */
+    fun checkAutoBackup(onWhatsappDue: () -> Unit) {
+        if (!settings.autoBackup) return
+        val now = System.currentTimeMillis()
+        if (now - settings.lastBackup < AutoBackup.WEEK_MS || now < settings.backupSnooze) return
+        if (settings.backupMode == "folder") {
+            val tree = settings.backupTree
+            if (tree.isBlank()) return
+            viewModelScope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching { AutoBackup.saveToFolder(getApplication<Application>(), Uri.parse(tree), dao.snapshot()) }.getOrDefault(false)
+                }
+                if (ok) {
+                    settings.lastBackup = System.currentTimeMillis(); _ab.value = abState()
+                    _messages.tryEmit("تم حفظ النسخة الاحتياطية الأسبوعية")
+                } else {
+                    settings.backupSnooze = System.currentTimeMillis() + 6L * 60 * 60 * 1000
+                    _messages.tryEmit("تعذر حفظ النسخة الأسبوعية، تحقق من المجلد المختار")
+                }
+            }
+        } else onWhatsappDue()
+    }
+
+    fun snoozeBackup() { settings.backupSnooze = System.currentTimeMillis() + 24L * 60 * 60 * 1000 }
+    fun markBackupDone() { settings.lastBackup = System.currentTimeMillis(); _ab.value = abState() }
+
+    /** يجهّز ملف نسخة مؤقتاً للمشاركة (واتساب) */
+    fun makeShareBackup(onReady: (java.io.File?) -> Unit) {
+        viewModelScope.launch {
+            val f = withContext(Dispatchers.IO) {
+                runCatching { AutoBackup.writeCacheFile(getApplication<Application>(), dao.snapshot()) }.getOrNull()
+            }
+            onReady(f)
+        }
+    }
+
     // ---------- قفل التطبيق ----------
     private val _lockEnabled = MutableStateFlow(settings.hasPin)
     private val _locked = MutableStateFlow(settings.hasPin)   // يبدأ مقفلاً مع كل تشغيل جديد
@@ -146,6 +192,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun saveCustomer(c: Customer) = safeSave { dao.upsertCustomer(c) }
+    /** آخر سعر بيع لهذا الزبون لهذا الصنف (يُعاد null إن لم يوجد) */
+    fun lastPrice(cid: Long, fid: Long, cur: String, onResult: (Double?) -> Unit) {
+        viewModelScope.launch {
+            val p = withContext(Dispatchers.IO) { runCatching { dao.lastPrice(cid, fid, cur) }.getOrNull() }
+            onResult(p)
+        }
+    }
+    fun deleteCustomer(id: Long, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.deleteCustomer(id) }
 
     fun addPayment(customerId: Long, amount: Double, note: String, currency: String = "IQD") = safeSave {
         dao.upsertPayment(Payment(customerId = customerId, date = System.currentTimeMillis(), amount = amount, note = note, currency = currency))

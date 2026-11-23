@@ -21,7 +21,9 @@ import com.fabric.ledger.data.SaleItem
 private data class CartLine(
     val fabric: Fabric? = null, val qty: String = "", val price: String = "",
     /** الإدخال بالقطعة: عدد القطع × متر لكل قطعة */
-    val byPiece: Boolean = false, val pieces: String = "", val plen: String = ""
+    val byPiece: Boolean = false, val pieces: String = "", val plen: String = "",
+    /** آخر سعر بيع به هذا الصنف لهذا الزبون (0 = لا يوجد) */
+    val lastPrice: Double = 0.0
 ) {
     /** الكمية الفعلية بالأمتار (أو بوحدة الصنف) */
     fun meters(): Double = if (byPiece) pieces.toD() * plen.toD() else qty.toD()
@@ -172,7 +174,7 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
             CurrencyChips(currency) { c ->
                 currency = c
                 for (k in lines.indices) lines[k].fabric?.let { f ->
-                    lines[k] = lines[k].copy(price = f.priceFor(c, customer?.isWholesale == true).takeIf { it > 0 }?.plain() ?: "")
+                    lines[k] = lines[k].copy(price = f.priceFor(c, customer?.isWholesale == true).takeIf { it > 0 }?.plain() ?: "", lastPrice = 0.0)
                 }
             }
 
@@ -203,8 +205,14 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                                             val keep = lines[i].byPiece && f.supportsPieces()
                                             lines[i] = lines[i].copy(
                                                 fabric = f, price = p.takeIf { it > 0 }?.plain() ?: "", byPiece = keep,
-                                                plen = if (f.rollLength > 0) f.rollLength.plain() else if (keep) lines[i].plen else ""
+                                                plen = if (f.rollLength > 0) f.rollLength.plain() else if (keep) lines[i].plen else "",
+                                                lastPrice = 0.0
                                             )
+                                            // اقتراح آخر سعر بيع به هذا الصنف لهذا الزبون
+                                            if (customerId > 0 && !isEdit) vm.lastPrice(customerId, f.id, currency) { lp ->
+                                                if (lp != null && lp > 0.0 && lines.getOrNull(i)?.fabric?.id == f.id)
+                                                    lines[i] = lines[i].copy(price = lp.plain(), lastPrice = lp)
+                                            }
                                             open = false
                                         }
                                     )
@@ -225,6 +233,11 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
                             NumField(line.qty, { lines[i] = lines[i].copy(qty = it) }, "الكمية (${line.fabric?.unit ?: ""})", Modifier.weight(1f))
                             NumField(line.price, { lines[i] = lines[i].copy(price = it) }, if (canPieces) "سعر المتر" else "السعر", Modifier.weight(1f))
                         }
+                        if (line.lastPrice > 0.0) Text(
+                            if (line.price.toD() == line.lastPrice) "السعر هو آخر سعر بعتَه لهذا الزبون"
+                            else "آخر سعر بعتَه لهذا الزبون: ${line.lastPrice.money(currency)}",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary
+                        )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("المجموع: ${(line.meters() * line.price.toD()).money(currency)}", Modifier.weight(1f), fontWeight = FontWeight.Bold)
                             if (lines.size > 1) IconButton(onClick = { lines.removeAt(i) }) {
@@ -237,17 +250,34 @@ fun NewSaleScreen(vm: MainViewModel, presetCustomerId: Long, editSaleId: Long, o
             TextButton(onClick = { lines.add(CartLine()) }) { Text("+ إضافة صنف آخر") }
             }
 
+            if (!amountOnly) {
+                val shown = lines.filter { it.fabric != null && it.meters() > 0 }
+                if (shown.isNotEmpty()) Card3D(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("القائمة", fontWeight = FontWeight.Bold)
+                        InvoiceTable(shown.map { l ->
+                            listOf(
+                                l.fabric!!.name,
+                                qtyCell(if (l.byPiece) l.pieces.toD() else 0.0, l.meters(), l.fabric!!.unit),
+                                l.price.toD().num(currency),
+                                (l.meters() * l.price.toD()).num(currency)
+                            )
+                        })
+                    }
+                }
+            }
             Card3D(Modifier.fillMaxWidth(), tint = MaterialTheme.colorScheme.primaryContainer) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("إجمالي الفاتورة: ${total.money(currency)}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     if (isCash) {
                         Text("بيع نقدي: يُسجَّل المبلغ مدفوعاً بالكامل")
                     } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            NumField(paid, { paid = it }, "المبلغ المدفوع", Modifier.weight(1f))
-                            TextButton(onClick = { paid = total.plain() }) { Text("دفع كامل") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = total > 0 && paidVal >= total - 0.005, onClick = { paid = total.plain() }, label = { Text("نقداً") })
+                            FilterChip(selected = paidVal <= 0.005, onClick = { paid = "" }, label = { Text("أجل") })
                         }
-                        Text("يُضاف للدين: ${(total - paidVal).money(currency)}", color = MaterialTheme.colorScheme.error)
+                        NumField(paid, { paid = it }, "المبلغ المدفوع (اتركه فارغاً للأجل)", Modifier.fillMaxWidth())
+                        Text("المتبقي (يُضاف للدين): ${(total - paidVal).money(currency)}", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }

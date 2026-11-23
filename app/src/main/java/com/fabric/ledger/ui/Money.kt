@@ -33,3 +33,7 @@ fun Map<String, Overdue>?.overdueText(): String? {
 fun Fabric.priceFor(currency: String, wholesale: Boolean): Double =
     if (currency == "USD") (if (wholesale) wholesalePriceUsd else retailPriceUsd)
     else (if (wholesale) wholesalePrice else retailPrice)
+
+/** رقم بلا رمز العملة للجداول: الدينار بلا كسور والدولار بكسرين */
+fun Double.num(code: String): String =
+    if (code == "USD") String.format(Locale.US, "%,.2f", this) else String.format(Locale.US, "%,.0f", this)

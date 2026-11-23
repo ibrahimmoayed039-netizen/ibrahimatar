@@ -64,6 +64,9 @@ fun HomeScreen(
     var settingsDlg by remember { mutableStateOf(false) }
     var lockDlg by remember { mutableStateOf(false) }
     val lockEnabled by vm.lockEnabled.collectAsStateWithLifecycle()
+    val abState by vm.autoBackup.collectAsStateWithLifecycle()
+    var backupDlg by remember { mutableStateOf(false) }
+    var backupDue by remember { mutableStateOf(false) }
 
     var fabricDlg by remember { mutableStateOf(false) }
     var fabricEdit by remember { mutableStateOf<Fabric?>(null) }
@@ -84,6 +87,14 @@ fun HomeScreen(
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: ""
     }
     var menu by remember { mutableStateOf(false) }
+    // عند فتح التطبيق: إن حان موعد النسخة الأسبوعية
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_START) {
+        vm.checkAutoBackup { backupDue = true }
+    }
+    fun shareBackupNow() = vm.makeShareBackup { f ->
+        if (f != null) { Share.zip(context, f, "نسخة احتياطية - دفتر الأقمشة"); vm.markBackupDone() }
+        else Toast.makeText(context, "تعذر تجهيز النسخة", Toast.LENGTH_SHORT).show()
+    }
     var pendingRestore by remember { mutableStateOf<Uri?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) vm.exportTo(uri) { ok ->
@@ -120,6 +131,10 @@ fun HomeScreen(
                             DropdownMenuItem(
                                 text = { Text("إعدادات الكشف والتذكير") },
                                 onClick = { menu = false; settingsDlg = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (abState.enabled) "النسخ التلقائي (مفعّل)" else "النسخ الاحتياطي التلقائي") },
+                                onClick = { menu = false; backupDlg = true }
                             )
                             DropdownMenuItem(
                                 text = { Text(if (lockEnabled) "قفل التطبيق (مفعّل)" else "قفل التطبيق برقم سري") },
@@ -264,10 +279,14 @@ fun HomeScreen(
                                     fontWeight = if (f.isLow()) FontWeight.Bold else FontWeight.Normal
                                 )
                                 Text("مشترى: ${(totals[f.id]?.purchased ?: 0.0).plain()}     مباع: ${(totals[f.id]?.sold ?: 0.0).plain()} ${f.unit}", style = MaterialTheme.typography.bodySmall)
-                                if (f.supportsPieces() && f.rollLength > 0) Text("طول القطعة الكاملة: ${f.rollLength.plain()} متر", style = MaterialTheme.typography.bodySmall)
+                                f.kindText()?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                                 if (f.minStock > 0) Text("حد التنبيه: ${f.minStock.plain()} ${f.unit}", style = MaterialTheme.typography.bodySmall)
-                                Text("مفرق: ${f.retailPrice.money("IQD")}    جملة: ${f.wholesalePrice.money("IQD")}")
+                                if (f.purchasePrice > 0) Text("سعر شراء المتر: ${f.purchasePrice.money(f.purchaseCurrency)}", style = MaterialTheme.typography.bodySmall)
+                                if (f.retailPrice > 0 || f.wholesalePrice > 0) Text("مفرق: ${f.retailPrice.money("IQD")}    جملة: ${f.wholesalePrice.money("IQD")}")
                                 if (f.retailPriceUsd > 0 || f.wholesalePriceUsd > 0) Text("مفرق: ${f.retailPriceUsd.money("USD")}    جملة: ${f.wholesalePriceUsd.money("USD")}")
+                                if (f.retailPrice <= 0 && f.wholesalePrice <= 0 && f.retailPriceUsd <= 0 && f.wholesalePriceUsd <= 0) {
+                                    Text("سعر البيع: يُحدَّد عند كل بيع", style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                             }
                         }
@@ -289,6 +308,7 @@ fun HomeScreen(
                                     Text(s.total.money(s.currency), fontWeight = FontWeight.Bold)
                                     val rem = s.total - s.paid
                                     if (rem > 0.005) Text("متبقي ${rem.money(s.currency)}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    StatusBadge(saleStatus(s.total, s.paid))
                                 }
                             }
                         }
@@ -409,6 +429,22 @@ fun HomeScreen(
         onChange = { old, new -> vm.changePin(old, new) },
         onDisable = { vm.disableLock(it) },
         onDismiss = { lockDlg = false }
+    )
+    if (backupDlg) AutoBackupDialog(
+        state = abState,
+        onSave = { en, mode, tree ->
+            vm.saveAutoBackup(en, mode, tree); backupDlg = false
+            vm.checkAutoBackup { backupDue = true }
+        },
+        onShareNow = { backupDlg = false; shareBackupNow() },
+        onDismiss = { backupDlg = false }
+    )
+    if (backupDue) AlertDialog(
+        onDismissRequest = { backupDue = false; vm.snoozeBackup() },
+        title = { Text("نسخة احتياطية أسبوعية") },
+        text = { Text("مضى أسبوع على آخر نسخة احتياطية. هل تريد إرسالها إلى واتساب الآن؟") },
+        confirmButton = { TextButton(onClick = { backupDue = false; shareBackupNow() }) { Text("إرسال") } },
+        dismissButton = { TextButton(onClick = { backupDue = false; vm.snoozeBackup() }) { Text("لاحقاً") } }
     )
     if (settingsDlg) SettingsDialog(
         initialGrace = grace, initialShop = shop, initialCc = cc,

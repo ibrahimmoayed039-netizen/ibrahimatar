@@ -176,7 +176,7 @@ fun CustomerScreen(
 
     if (editDlg && customer != null) CustomerDialog(
         initial = customer,
-        onSave = { vm.saveCustomer(it); editDlg = false },
+        onSave = { c, _ -> vm.saveCustomer(c); editDlg = false },
         onDismiss = { editDlg = false }
     )
     if (delDlg && customer != null) ConfirmDialog(

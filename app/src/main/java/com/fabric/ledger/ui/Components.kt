@@ -36,6 +36,7 @@ import com.fabric.ledger.data.Customer
 import com.fabric.ledger.data.Fabric
 import com.fabric.ledger.data.FabricTotals
 import com.fabric.ledger.data.Payment
+import com.fabric.ledger.data.PreviousAccount
 import com.fabric.ledger.data.Purchase
 import com.fabric.ledger.data.SupplierPayment
 import com.fabric.ledger.data.Sale
@@ -307,16 +308,24 @@ fun FabricDialog(initial: Fabric?, onSave: (Fabric) -> Unit, onDelete: (() -> Un
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CustomerDialog(onSave: (Customer) -> Unit, onDismiss: () -> Unit, initial: Customer? = null) {
+fun CustomerDialog(onSave: (Customer, PreviousAccount?) -> Unit, onDismiss: () -> Unit, initial: Customer? = null) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var phone by remember { mutableStateOf(initial?.phone ?: "") }
     var wholesale by remember { mutableStateOf(initial?.isWholesale ?: false) }
+    // الحساب السابق: يظهر عند إضافة زبون جديد فقط
+    var hasPrev by remember { mutableStateOf(false) }
+    var prevAmount by remember { mutableStateOf("") }
+    var prevCur by remember { mutableStateOf("IQD") }
+    var prevDate by remember { mutableStateOf(System.currentTimeMillis()) }
+    var pickDate by remember { mutableStateOf(false) }
+    var triedSave by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "إضافة زبون" else "تعديل الزبون") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("الاسم") }, singleLine = true)
                 OutlinedTextField(
                     phone, { phone = it }, label = { Text("رقم الهاتف") }, singleLine = true,
@@ -327,15 +336,54 @@ fun CustomerDialog(onSave: (Customer) -> Unit, onDismiss: () -> Unit, initial: C
                     Spacer(Modifier.width(8.dp))
                     Text("زبون جملة")
                 }
+                if (initial == null) {
+                    HorizontalDivider()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = hasPrev, onCheckedChange = { hasPrev = it })
+                        Spacer(Modifier.width(8.dp))
+                        Text("لديه حساب سابق")
+                    }
+                    if (hasPrev) {
+                        OutlinedTextField(
+                            prevAmount, { prevAmount = it }, label = { Text("المبلغ المتبقي عليه") }, singleLine = true,
+                            isError = triedSave && prevAmount.toD() <= 0.0,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                        )
+                        CurrencyChips(prevCur) { prevCur = it }
+                        OutlinedButton(onClick = { pickDate = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("تاريخ آخر حساب: " + SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date(prevDate)))
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                if (name.isNotBlank()) onSave(Customer(id = initial?.id ?: 0, name = name.trim(), phone = phone.trim(), isWholesale = wholesale))
+                triedSave = true
+                if (name.isBlank()) return@TextButton
+                val prev = if (initial == null && hasPrev) {
+                    if (prevAmount.toD() <= 0.0) return@TextButton
+                    PreviousAccount(prevAmount.toD(), prevCur, prevDate)
+                } else null
+                onSave(Customer(id = initial?.id ?: 0, name = name.trim(), phone = phone.trim(), isWholesale = wholesale), prev)
             }) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
     )
+    if (pickDate) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = prevDate)
+        DatePickerDialog(
+            onDismissRequest = { pickDate = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    // منتقي التاريخ يُرجع منتصف الليل UTC؛ نضيف 12 ساعة كي لا يتغير اليوم بحسب المنطقة الزمنية
+                    state.selectedDateMillis?.let { prevDate = it + 12 * 3_600_000L }
+                    pickDate = false
+                }) { Text("موافق") }
+            },
+            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("إلغاء") } }
+        ) { DatePicker(state = state) }
+    }
 }
 
 @Composable

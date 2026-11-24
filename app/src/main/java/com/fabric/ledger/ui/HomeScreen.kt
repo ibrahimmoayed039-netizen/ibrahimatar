@@ -422,7 +422,7 @@ fun HomeScreen(
         onDelete = fabricEdit?.let { f -> { fabricDlg = false; vm.deleteFabric(f) { ok -> Toast.makeText(context, if (ok) "تم الحذف" else "تعذر الحذف", Toast.LENGTH_SHORT).show() } } },
         onDismiss = { fabricDlg = false }
     )
-    if (customerDlg) CustomerDialog(onSave = { vm.saveCustomer(it); customerDlg = false }, onDismiss = { customerDlg = false })
+    if (customerDlg) CustomerDialog(onSave = { c, prev -> vm.saveCustomer(c, prev); customerDlg = false }, onDismiss = { customerDlg = false })
     if (lockDlg) LockSettingsDialog(
         enabled = lockEnabled,
         onEnable = { vm.enableLock(it) },

@@ -145,7 +145,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val items = dao.allItemsNow().groupBy { it.saleId }
         val saleRows = dao.salesNow().filter { it.customerId == customerId }.map { s ->
             val list = items[s.id] ?: emptyList()
-            val detail = if (list.isEmpty()) (if (s.note.isBlank()) "قائمة بمبلغ فقط" else "قائمة: ${s.note}")
+            val detail = if (list.isEmpty()) (when {
+                s.note == PREVIOUS_ACCOUNT_NOTE -> "رصيد حساب سابق (مرحَّل)"
+                s.note.isBlank() -> "قائمة بمبلغ فقط"
+                else -> "قائمة: ${s.note}"
+            })
             else list.joinToString("، ") {
                 "${it.fabricName} ${qtyText(it.pieces, it.quantity, it.unit)} × ${it.unitPrice.plain()}"
             }
@@ -191,7 +195,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             onDone(k)
         }
     }
-    fun saveCustomer(c: Customer) = safeSave { dao.upsertCustomer(c) }
+    fun saveCustomer(c: Customer, prev: PreviousAccount? = null) = safeSave {
+        if (prev != null) dao.saveCustomerWithPrevious(c, prev) else dao.upsertCustomer(c)
+    }
     /** آخر سعر بيع لهذا الزبون لهذا الصنف (يُعاد null إن لم يوجد) */
     fun lastPrice(cid: Long, fid: Long, cur: String, onResult: (Double?) -> Unit) {
         viewModelScope.launch {

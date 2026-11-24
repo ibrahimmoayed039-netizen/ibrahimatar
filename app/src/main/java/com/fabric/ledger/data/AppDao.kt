@@ -98,6 +98,50 @@ abstract class AppDao {
     @Query("DELETE FROM supplier_payments") abstract suspend fun clearSupplierPayments()
     @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun insertSupplierPayments(l: List<SupplierPayment>)
 
+    // ---------- المورّدون ----------
+    @Query("SELECT * FROM suppliers ORDER BY name")
+    abstract fun suppliers(): Flow<List<Supplier>>
+    @Query("SELECT * FROM suppliers") abstract suspend fun suppliersNow(): List<Supplier>
+    @Query("SELECT * FROM suppliers WHERE id = :id") abstract suspend fun supplierById(id: Long): Supplier?
+    /** إضافة مورّد؛ الاسم المكرر يرمي خطأ فيظهر «تعذر الحفظ» */
+    @Insert abstract suspend fun insertSupplier(s: Supplier): Long
+    @Insert(onConflict = OnConflictStrategy.IGNORE) abstract suspend fun insertSupplierIgnore(s: Supplier): Long
+    @Query("UPDATE suppliers SET name = :name, phone = :phone WHERE id = :id")
+    abstract suspend fun updateSupplierRow(id: Long, name: String, phone: String)
+    @Query("UPDATE purchases SET supplier = :new WHERE supplier = :old") abstract suspend fun renamePurchasesSupplier(old: String, new: String)
+    @Query("UPDATE supplier_payments SET supplier = :new WHERE supplier = :old") abstract suspend fun renamePaymentsSupplier(old: String, new: String)
+    @Query("SELECT COUNT(*) FROM purchases WHERE supplier = :name") abstract suspend fun purchasesCountOf(name: String): Int
+    @Query("SELECT COUNT(*) FROM supplier_payments WHERE supplier = :name") abstract suspend fun paymentsCountOf(name: String): Int
+    @Query("DELETE FROM suppliers WHERE id = :id") abstract suspend fun deleteSupplierRow(id: Long)
+    @Query("DELETE FROM suppliers") abstract suspend fun clearSuppliers()
+    @Insert(onConflict = OnConflictStrategy.REPLACE) abstract suspend fun insertSuppliers(l: List<Supplier>)
+
+    /** يضمن وجود المورّد بهذا الاسم (يُنشأ تلقائياً عند الكتابة في الشراء) */
+    open suspend fun ensureSupplier(name: String) {
+        val n = name.trim()
+        if (n.isNotEmpty()) insertSupplierIgnore(Supplier(name = n))
+    }
+
+    /** تعديل مورّد؛ تغيير الاسم يُطبَّق على كل مشترياته ودفعاته */
+    @Transaction
+    open suspend fun editSupplier(s: Supplier) {
+        val old = supplierById(s.id) ?: return
+        updateSupplierRow(s.id, s.name, s.phone)
+        if (old.name != s.name) {
+            renamePurchasesSupplier(old.name, s.name)
+            renamePaymentsSupplier(old.name, s.name)
+        }
+    }
+
+    /** لا يُحذف مورّد له مشتريات أو دفعات؛ يُرجع false عندها */
+    @Transaction
+    open suspend fun deleteSupplier(id: Long): Boolean {
+        val s = supplierById(id) ?: return true
+        if (purchasesCountOf(s.name) > 0 || paymentsCountOf(s.name) > 0) return false
+        deleteSupplierRow(id)
+        return true
+    }
+
     // ---------- الزبائن ----------
     @Query("SELECT * FROM customers ORDER BY name")
     abstract fun customers(): Flow<List<Customer>>
@@ -106,10 +150,10 @@ abstract class AppDao {
 
     /** حفظ زبون جديد مع حسابه السابق (إن وُجد) كقائمة بمبلغ فقط بتاريخ آخر حساب، فيدخل في الرصيد وكشف الحساب والدين المتأخر */
     @Transaction
-    open suspend fun saveCustomerWithPrevious(c: Customer, prev: PreviousAccount?) {
+    open suspend fun saveCustomerWithPrevious(c: Customer, prev: List<PreviousAccount>) {
         val id = upsertCustomer(c)
-        if (prev != null && prev.amount > 0.0) {
-            insertSale(Sale(customerId = id, date = prev.date, total = prev.amount, paid = 0.0, note = PREVIOUS_ACCOUNT_NOTE, currency = prev.currency))
+        prev.filter { it.amount > 0.0 }.forEach {
+            insertSale(Sale(customerId = id, date = it.date, total = it.amount, paid = 0.0, note = PREVIOUS_ACCOUNT_NOTE, currency = it.currency))
         }
     }
     /** آخر سعر بيع به هذا الصنف لهذا الزبون بنفس العملة (null إن لم يشترِه من قبل) */
@@ -209,11 +253,11 @@ abstract class AppDao {
 
     @Transaction
     open suspend fun snapshot(): BackupData =
-        BackupData(fabricsNow(), customersNow(), salesNow(), allItemsNow(), paymentsNow(), purchasesNow(), supplierPaymentsNow())
+        BackupData(fabricsNow(), customersNow(), salesNow(), allItemsNow(), paymentsNow(), purchasesNow(), supplierPaymentsNow(), suppliersNow())
 
     @Transaction
     open suspend fun restoreAll(b: BackupData) {
-        clearItems(); clearSales(); clearPayments(); clearPurchases(); clearSupplierPayments(); clearCustomers(); clearFabrics()
+        clearItems(); clearSales(); clearPayments(); clearPurchases(); clearSupplierPayments(); clearSuppliers(); clearCustomers(); clearFabrics()
         insertFabrics(b.fabrics)
         insertCustomers(b.customers)
         insertSales(b.sales)
@@ -221,5 +265,8 @@ abstract class AppDao {
         insertPayments(b.payments)
         insertPurchases(b.purchases)
         insertSupplierPayments(b.supplierPayments)
+        insertSuppliers(b.suppliers)
+        b.purchases.forEach { ensureSupplier(it.supplier) }
+        b.supplierPayments.forEach { ensureSupplier(it.supplier) }
     }
 }

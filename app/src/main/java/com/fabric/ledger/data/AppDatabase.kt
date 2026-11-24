@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Fabric::class, Customer::class, Sale::class, SaleItem::class, Payment::class, Purchase::class, SupplierPayment::class],
-    version = 9,
+    entities = [Fabric::class, Customer::class, Sale::class, SaleItem::class, Payment::class, Purchase::class, SupplierPayment::class, Supplier::class],
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -98,10 +98,19 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE fabrics ADD COLUMN imagePath TEXT NOT NULL DEFAULT ''")
             }
         }
+        /** 9 → 10: جدول المورّدين (يُملأ بأسماء الموردين الموجودة في المشتريات والدفعات) */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, phone TEXT NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_suppliers_name ON suppliers (name)")
+                db.execSQL("INSERT OR IGNORE INTO suppliers (name, phone) SELECT DISTINCT TRIM(supplier), '' FROM purchases WHERE TRIM(supplier) != ''")
+                db.execSQL("INSERT OR IGNORE INTO suppliers (name, phone) SELECT DISTINCT TRIM(supplier), '' FROM supplier_payments WHERE TRIM(supplier) != ''")
+            }
+        }
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(
                 context.applicationContext, AppDatabase::class.java, "fabric_ledger.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10).build().also { instance = it }
         }
     }
 }

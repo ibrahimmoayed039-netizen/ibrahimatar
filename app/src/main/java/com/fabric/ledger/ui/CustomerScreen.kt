@@ -49,6 +49,7 @@ fun CustomerScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val overdueMap by vm.overdue.collectAsStateWithLifecycle()
+    val lastPay by vm.lastPayment.collectAsStateWithLifecycle()
     val grace by vm.graceDays.collectAsStateWithLifecycle()
     val shop by vm.shopName.collectAsStateWithLifecycle()
     val cc by vm.countryCode.collectAsStateWithLifecycle()
@@ -81,6 +82,7 @@ fun CustomerScreen(
                     Column(Modifier.padding(16.dp)) {
                         Text("الدين الحالي")
                         BalanceLines(balance)
+                        if (balance.hasDebt()) Text(lastPaymentText(lastPay[id]), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                         if (!customer?.phone.isNullOrBlank()) Text(customer!!.phone, style = MaterialTheme.typography.bodySmall)
                     }
                 }

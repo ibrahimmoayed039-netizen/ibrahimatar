@@ -186,3 +186,28 @@ fun LockSettingsDialog(
         dismissButton = { if (mode != 0) TextButton(onClick = onDismiss) { Text("إلغاء") } }
     )
 }
+
+/** طلب الرمز السري للتطبيق لإظهار معلومة مخفية */
+@Composable
+fun PinPromptDialog(title: String, onVerify: (String) -> Boolean, onSuccess: () -> Unit, onDismiss: () -> Unit) {
+    var pin by remember { mutableStateOf("") }
+    var err by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = pin, onValueChange = { pin = it.filter { c -> c.isDigit() }.take(6); err = false }, singleLine = true,
+                    label = { Text("الرمز السري") }, isError = err, visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                )
+                if (err) Text("الرمز غير صحيح", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (onVerify(pin)) onSuccess() else err = true }) { Text("إظهار") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
+    )
+}

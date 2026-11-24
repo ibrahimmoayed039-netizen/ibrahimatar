@@ -33,6 +33,7 @@ import com.fabric.ledger.ui.FabricScreen
 import com.fabric.ledger.ui.HomeScreen
 import com.fabric.ledger.ui.LockScreen
 import com.fabric.ledger.ui.NewSaleScreen
+import com.fabric.ledger.ui.SupplierScreen
 
 /** يُقفل التطبيق إن غاب في الخلفية أكثر من هذه المدة */
 private const val LOCK_AFTER_MS = 30_000L
@@ -70,11 +71,15 @@ fun AppRoot() {
                                 onOpenCustomer = { nav.navigate("customer/$it") },
                                 onNewSale = { nav.navigate("sale/-1") },
                                 onEditSale = { nav.navigate("editSale/$it") },
-                                onOpenFabric = { nav.navigate("fabric/$it") }
+                                onOpenFabric = { nav.navigate("fabric/$it") },
+                                onOpenSupplier = { nav.navigate("supplier/$it") }
                             )
                         }
                         composable("fabric/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
                             FabricScreen(vm, it.arguments!!.getLong("id"), onBack = { nav.popBackStack() })
+                        }
+                        composable("supplier/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
+                            SupplierScreen(vm, it.arguments!!.getLong("id"), onBack = { nav.popBackStack() })
                         }
                         composable("customer/{id}", arguments = listOf(navArgument("id") { type = NavType.LongType })) {
                             val id = it.arguments!!.getLong("id")

@@ -46,7 +46,7 @@ private sealed class LedgerRow(val date: Long, val key: String) {
 @Composable
 fun HomeScreen(
     vm: MainViewModel, onOpenCustomer: (Long) -> Unit, onNewSale: () -> Unit,
-    onEditSale: (Long) -> Unit, onOpenFabric: (Long) -> Unit
+    onEditSale: (Long) -> Unit, onOpenFabric: (Long) -> Unit, onOpenSupplier: (Long) -> Unit
 ) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val fabrics by vm.fabrics.collectAsStateWithLifecycle()
@@ -54,15 +54,22 @@ fun HomeScreen(
     val sales by vm.sales.collectAsStateWithLifecycle()
     val balances by vm.balances.collectAsStateWithLifecycle()
     val overdue by vm.overdue.collectAsStateWithLifecycle()
+    val lastPay by vm.lastPayment.collectAsStateWithLifecycle()
     val totals by vm.totals.collectAsStateWithLifecycle()
     val purchases by vm.purchases.collectAsStateWithLifecycle()
     val supplierPayments by vm.supplierPayments.collectAsStateWithLifecycle()
+    val suppliers by vm.suppliers.collectAsStateWithLifecycle()
+    val supplierBalances by vm.supplierBalances.collectAsStateWithLifecycle()
+    val supplierNames = suppliers.map { it.name }
+    var supplierDlg by remember { mutableStateOf(false) }
     val payables by vm.payables.collectAsStateWithLifecycle()
     val grace by vm.graceDays.collectAsStateWithLifecycle()
     val shop by vm.shopName.collectAsStateWithLifecycle()
     val cc by vm.countryCode.collectAsStateWithLifecycle()
     var settingsDlg by remember { mutableStateOf(false) }
     var lockDlg by remember { mutableStateOf(false) }
+    var totalShown by remember { mutableStateOf(false) }
+    var totalPinDlg by remember { mutableStateOf(false) }
     val lockEnabled by vm.lockEnabled.collectAsStateWithLifecycle()
     val abState by vm.autoBackup.collectAsStateWithLifecycle()
     var backupDlg by remember { mutableStateOf(false) }
@@ -205,8 +212,16 @@ fun HomeScreen(
                     item {
                         HeroCard(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(16.dp)) {
-                                Text("إجمالي الديون على الزبائن")
-                                BalanceLines(debtByCur.filterValues { it > 0.005 })
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("إجمالي الديون على الزبائن", Modifier.weight(1f))
+                                    TextButton(onClick = {
+                                        if (totalShown) totalShown = false
+                                        else if (lockEnabled) totalPinDlg = true
+                                        else totalShown = true
+                                    }) { Text(if (totalShown) "إخفاء" else "إظهار", color = androidx.compose.ui.graphics.Color.White) }
+                                }
+                                if (totalShown) BalanceLines(debtByCur.filterValues { it > 0.005 })
+                                else Text("••••••••", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -238,6 +253,7 @@ fun HomeScreen(
                                     if (odTxt != null) {
                                         Text("⚠ متأخر: $odTxt", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                                     }
+                                    if (b.hasDebt()) Text(lastPaymentText(lastPay[c.id]), style = MaterialTheme.typography.bodySmall)
                                 }
                                 Text(
                                     b.balanceText(), fontWeight = FontWeight.Bold,
@@ -338,7 +354,29 @@ fun HomeScreen(
                         }
                     }
                     item(key = "supplier_pay_btn") {
-                        Button3D(onClick = { supPayDlg = true }, modifier = Modifier.fillMaxWidth()) { Text("تسجيل دفعة للمورّد") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button3D(onClick = { supPayDlg = true }, modifier = Modifier.weight(1f)) { Text("تسجيل دفعة للمورّد") }
+                            OutlinedButton(onClick = { supplierDlg = true }, modifier = Modifier.weight(1f)) { Text("إضافة مورّد") }
+                        }
+                    }
+                    if (suppliers.isNotEmpty()) {
+                        item(key = "suppliers_header") { Text("الموردون (اضغط على المورّد لعرض قوائم شرائه)", fontWeight = FontWeight.Bold) }
+                        items(suppliers, key = { "supplier_${it.id}" }) { sp ->
+                            val b = supplierBalances[sp.name]
+                            Card3D(onClick = { onOpenSupplier(sp.id) }, modifier = Modifier.fillMaxWidth()) {
+                                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(sp.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                        if (sp.phone.isNotBlank()) Text(sp.phone, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text(
+                                        if (b.hasDebt()) b.balanceText() else "0", fontWeight = FontWeight.Bold,
+                                        color = if (b.hasDebt()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                        item(key = "all_purchases_header") { Text("كل المشتريات", fontWeight = FontWeight.Bold) }
                     }
                     val rows = (purchases.map { LedgerRow.P(it) } + supplierPayments.map { LedgerRow.S(it) }).sortedByDescending { it.date }
                     if (rows.isEmpty()) item { Text("لا توجد مشتريات بعد. اضغط «تسجيل شراء» لإضافة أول عملية.") }
@@ -392,27 +430,27 @@ fun HomeScreen(
     if (purchaseDlg) PurchaseDialog(
         initial = null, fabrics = fabrics, presetFabricId = -1L,
         onSave = { np -> purchaseDlg = false; vm.addPurchase(np) { ok -> done(ok, "تم تسجيل الشراء وإضافته للمخزون") } },
-        onDelete = null, onDismiss = { purchaseDlg = false }
+        onDelete = null, onDismiss = { purchaseDlg = false }, suppliers = supplierNames
     )
     editPurchase?.let { p ->
         PurchaseDialog(
             initial = p, fabrics = fabrics, presetFabricId = p.fabricId,
             onSave = { np -> editPurchase = null; vm.editPurchase(np) { ok -> done(ok, "تم التعديل") } },
             onDelete = { editPurchase = null; vm.deletePurchase(p.id) { ok -> done(ok, "تم الحذف") } },
-            onDismiss = { editPurchase = null }
+            onDismiss = { editPurchase = null }, suppliers = supplierNames
         )
     }
     if (supPayDlg) SupplierPaymentDialog(
         initial = null,
         onSave = { np -> supPayDlg = false; vm.saveSupplierPayment(np) { ok -> done(ok, "تم تسجيل الدفعة") } },
-        onDelete = null, onDismiss = { supPayDlg = false }
+        onDelete = null, onDismiss = { supPayDlg = false }, suppliers = supplierNames
     )
     editSupPay?.let { sp ->
         SupplierPaymentDialog(
             initial = sp,
             onSave = { np -> editSupPay = null; vm.saveSupplierPayment(np) { ok -> done(ok, "تم التعديل") } },
             onDelete = { editSupPay = null; vm.deleteSupplierPayment(sp) { ok -> done(ok, "تم الحذف") } },
-            onDismiss = { editSupPay = null }
+            onDismiss = { editSupPay = null }, suppliers = supplierNames
         )
     }
 
@@ -421,6 +459,17 @@ fun HomeScreen(
         onSave = { vm.saveFabric(it); fabricDlg = false },
         onDelete = fabricEdit?.let { f -> { fabricDlg = false; vm.deleteFabric(f) { ok -> Toast.makeText(context, if (ok) "تم الحذف" else "تعذر الحذف", Toast.LENGTH_SHORT).show() } } },
         onDismiss = { fabricDlg = false }
+    )
+    if (totalPinDlg) PinPromptDialog(
+        title = "إظهار إجمالي الديون",
+        onVerify = { vm.verifyPin(it) },
+        onSuccess = { totalShown = true; totalPinDlg = false },
+        onDismiss = { totalPinDlg = false }
+    )
+    if (supplierDlg) SupplierDialog(
+        initial = null,
+        onSave = { vm.addSupplier(it); supplierDlg = false },
+        onDismiss = { supplierDlg = false }
     )
     if (customerDlg) CustomerDialog(onSave = { c, prev -> vm.saveCustomer(c, prev); customerDlg = false }, onDismiss = { customerDlg = false })
     if (lockDlg) LockSettingsDialog(

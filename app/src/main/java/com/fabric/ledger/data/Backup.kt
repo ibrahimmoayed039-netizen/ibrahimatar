@@ -10,7 +10,8 @@ data class BackupData(
     val items: List<SaleItem>,
     val payments: List<Payment>,
     val purchases: List<Purchase> = emptyList(),
-    val supplierPayments: List<SupplierPayment> = emptyList()
+    val supplierPayments: List<SupplierPayment> = emptyList(),
+    val suppliers: List<Supplier> = emptyList()
 )
 
 /** نسخة احتياطية بصيغة JSON مقروءة، لا تعتمد على إصدار قاعدة البيانات */
@@ -66,6 +67,9 @@ object Backup {
                     .put("currency", s.currency).put("supplier", s.supplier).put("note", s.note))
             }
         })
+        o.put("suppliers", JSONArray().also { a ->
+            d.suppliers.forEach { x -> a.put(JSONObject().put("id", x.id).put("name", x.name).put("phone", x.phone)) }
+        })
         return o.toString(2)
     }
 
@@ -105,6 +109,9 @@ object Backup {
             supplierPayments = (o.optJSONArray("supplierPayments")?.objs() ?: emptyList()).map {
                 SupplierPayment(it.getLong("id"), it.getLong("date"), it.getDouble("amount"),
                     it.optString("currency", "IQD"), it.optString("supplier", ""), it.optString("note", ""))
+            },
+            suppliers = (o.optJSONArray("suppliers")?.objs() ?: emptyList()).map {
+                Supplier(it.getLong("id"), it.getString("name"), it.optString("phone", ""))
             }
         )
     }

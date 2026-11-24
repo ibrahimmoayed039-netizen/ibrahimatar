@@ -2,6 +2,7 @@ package com.fabric.ledger.data
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 @Entity(tableName = "fabrics")
@@ -134,3 +135,11 @@ const val PREVIOUS_ACCOUNT_NOTE = "حساب سابق"
 
 /** حساب سابق للزبون عند إضافته: المبلغ المتبقي عليه وعملته وتاريخ آخر حساب */
 data class PreviousAccount(val amount: Double, val currency: String, val date: Long)
+
+/** مورّد: يُربط بعمليات الشراء والدفعات بالاسم (supplier) */
+@Entity(tableName = "suppliers", indices = [Index(value = ["name"], unique = true)])
+data class Supplier(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val phone: String = ""
+)

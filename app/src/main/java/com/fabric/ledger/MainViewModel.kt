@@ -25,6 +25,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val purchases = dao.purchases().state(emptyList())
     private val allItems = dao.allItems().state(emptyList())
     val supplierPayments = dao.supplierPayments().state(emptyList())
+    val suppliers = dao.suppliers().state(emptyList())
+
+    /** ما علينا لكل مورّد (بالاسم) لكل عملة = مشترياته - المسدَّد - دفعاته */
+    val supplierBalances: StateFlow<Map<String, Map<String, Double>>> = combine(purchases, supplierPayments) { p, sp ->
+        val m = mutableMapOf<String, MutableMap<String, Double>>()
+        p.filter { it.supplier.isNotBlank() }.forEach {
+            val c = m.getOrPut(it.supplier) { mutableMapOf() }
+            c[it.currency] = (c[it.currency] ?: 0.0) + it.total - it.paid
+        }
+        sp.filter { it.supplier.isNotBlank() }.forEach {
+            val c = m.getOrPut(it.supplier) { mutableMapOf() }
+            c[it.currency] = (c[it.currency] ?: 0.0) - it.amount
+        }
+        m.mapValues { e -> e.value.toMap() }
+    }.state(emptyMap())
 
     /** لكل عملة: سعر البضاعة المشتراة، المسدَّد (وقت الشراء + دفعات المورّدين)، والمتبقي */
     val payables: StateFlow<Map<String, Payable>> = combine(purchases, supplierPayments) { p, sp ->
@@ -123,6 +138,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val locked: StateFlow<Boolean> = _locked
     fun pinLength(): Int = settings.pinLen
     fun unlock(pin: String): Boolean = settings.checkPin(pin).also { if (it) _locked.value = false }
+    /** التحقق من الرمز دون فتح/قفل التطبيق (لإظهار المبالغ المخفية) */
+    fun verifyPin(pin: String): Boolean = settings.checkPin(pin)
     fun lockIfEnabled() { if (_lockEnabled.value) _locked.value = true }
     fun enableLock(pin: String) { settings.setPin(pin); _lockEnabled.value = true }
     fun changePin(old: String, new: String): Boolean =
@@ -138,6 +155,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     Debt.overdue(sl, (byCustomer[cid] ?: emptyList()).filter { it.currency == cur }, g)
                 }
             }
+    }.state(emptyMap())
+
+    /** تاريخ آخر دفعة لكل زبون (بأي عملة) */
+    val lastPayment: StateFlow<Map<Long, Long>> = payments.map { p ->
+        p.groupBy { it.customerId }.mapValues { e -> e.value.maxOf { it.date } }
     }.state(emptyMap())
 
     /** سطور كشف الحساب مرتبة من الأقدم إلى الأحدث */
@@ -183,10 +205,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         dao.removeFabric(f)
         com.fabric.ledger.ui.deleteFabricImage(f.imagePath)
     }
-    fun saveSupplierPayment(p: SupplierPayment, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.upsertSupplierPayment(p) }
+    fun saveSupplierPayment(p: SupplierPayment, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.ensureSupplier(p.supplier); dao.upsertSupplierPayment(p) }
     fun deleteSupplierPayment(p: SupplierPayment, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.deleteSupplierPayment(p) }
-    fun addPurchase(p: Purchase, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.addPurchase(p) }
-    fun editPurchase(p: Purchase, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.editPurchase(p) }
+    fun addPurchase(p: Purchase, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.ensureSupplier(p.supplier); dao.addPurchase(p) }
+    fun editPurchase(p: Purchase, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.ensureSupplier(p.supplier); dao.editPurchase(p) }
     fun deletePurchase(id: Long, onDone: (Boolean) -> Unit = {}) = safeDelete(onDone) { dao.removePurchase(id) }
     /** فتح n بالة من صنف؛ يُرجع عدد البالات التي فُتحت فعلاً */
     fun openBales(id: Long, n: Double, onDone: (Double) -> Unit = {}) {
@@ -195,8 +217,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             onDone(k)
         }
     }
-    fun saveCustomer(c: Customer, prev: PreviousAccount? = null) = safeSave {
-        if (prev != null) dao.saveCustomerWithPrevious(c, prev) else dao.upsertCustomer(c)
+    fun addSupplier(s: Supplier) = safeSave { dao.insertSupplier(s.copy(name = s.name.trim(), phone = s.phone.trim())) }
+    fun editSupplier(s: Supplier) = safeSave { dao.editSupplier(s.copy(name = s.name.trim(), phone = s.phone.trim())) }
+    fun deleteSupplier(id: Long, onDone: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) { runCatching { dao.deleteSupplier(id) }.getOrDefault(false) }
+            onDone(ok)
+        }
+    }
+    fun saveCustomer(c: Customer, prev: List<PreviousAccount> = emptyList()) = safeSave {
+        if (prev.isNotEmpty()) dao.saveCustomerWithPrevious(c, prev) else dao.upsertCustomer(c)
     }
     /** آخر سعر بيع لهذا الزبون لهذا الصنف (يُعاد null إن لم يوجد) */
     fun lastPrice(cid: Long, fid: Long, cur: String, onResult: (Double?) -> Unit) {

@@ -38,6 +38,7 @@ import com.fabric.ledger.data.FabricTotals
 import com.fabric.ledger.data.Payment
 import com.fabric.ledger.data.PreviousAccount
 import com.fabric.ledger.data.Purchase
+import com.fabric.ledger.data.Supplier
 import com.fabric.ledger.data.SupplierPayment
 import com.fabric.ledger.data.Sale
 import java.text.SimpleDateFormat
@@ -149,6 +150,7 @@ fun NumField(value: String, onChange: (String) -> Unit, label: String, modifier:
         // أرقام وفاصلة عشرية فقط (يمنع الإشارة السالبة وأي نص)
         value = value, onValueChange = { onChange(it.filter { c -> c.isDigit() || c == '.' || c == ',' || c == '\u066B' }) }, label = { Text(label) },
         singleLine = true, modifier = modifier,
+        visualTransformation = remember { ThousandsTransformation() },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
     )
 }
@@ -310,16 +312,17 @@ fun FabricDialog(initial: Fabric?, onSave: (Fabric) -> Unit, onDelete: (() -> Un
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CustomerDialog(onSave: (Customer, PreviousAccount?) -> Unit, onDismiss: () -> Unit, initial: Customer? = null) {
+fun CustomerDialog(onSave: (Customer, List<PreviousAccount>) -> Unit, onDismiss: () -> Unit, initial: Customer? = null) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var phone by remember { mutableStateOf(initial?.phone ?: "") }
     var wholesale by remember { mutableStateOf(initial?.isWholesale ?: false) }
     // الحساب السابق: يظهر عند إضافة زبون جديد فقط
     var hasPrev by remember { mutableStateOf(false) }
-    var prevAmount by remember { mutableStateOf("") }
-    var prevCur by remember { mutableStateOf("IQD") }
-    var prevDate by remember { mutableStateOf(System.currentTimeMillis()) }
-    var pickDate by remember { mutableStateOf(false) }
+    var amountIqd by remember { mutableStateOf("") }
+    var amountUsd by remember { mutableStateOf("") }
+    var dateIqd by remember { mutableStateOf(System.currentTimeMillis()) }
+    var dateUsd by remember { mutableStateOf(System.currentTimeMillis()) }
+    var pickFor by remember { mutableStateOf<String?>(null) }
     var triedSave by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -344,14 +347,25 @@ fun CustomerDialog(onSave: (Customer, PreviousAccount?) -> Unit, onDismiss: () -
                         Text("لديه حساب سابق")
                     }
                     if (hasPrev) {
+                        Text("اترك حقل العملة فارغاً إن لم يكن له حساب بها", style = MaterialTheme.typography.bodySmall)
+                        val fmt = SimpleDateFormat("yyyy/MM/dd", Locale.US)
                         OutlinedTextField(
-                            prevAmount, { prevAmount = it }, label = { Text("المبلغ المتبقي عليه") }, singleLine = true,
-                            isError = triedSave && prevAmount.toD() <= 0.0,
+                            amountIqd, { amountIqd = it }, label = { Text("المتبقي عليه بالدينار (د.ع)") }, singleLine = true,
+                            isError = triedSave && amountIqd.toD() <= 0.0 && amountUsd.toD() <= 0.0,
+                            visualTransformation = remember { ThousandsTransformation() },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
                         )
-                        CurrencyChips(prevCur) { prevCur = it }
-                        OutlinedButton(onClick = { pickDate = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("تاريخ آخر حساب: " + SimpleDateFormat("yyyy/MM/dd", Locale.US).format(Date(prevDate)))
+                        if (amountIqd.toD() > 0.0) OutlinedButton(onClick = { pickFor = "IQD" }, modifier = Modifier.fillMaxWidth()) {
+                            Text("تاريخ آخر حساب (دينار): " + fmt.format(Date(dateIqd)))
+                        }
+                        OutlinedTextField(
+                            amountUsd, { amountUsd = it }, label = { Text("المتبقي عليه بالدولار (\$)") }, singleLine = true,
+                            isError = triedSave && amountIqd.toD() <= 0.0 && amountUsd.toD() <= 0.0,
+                            visualTransformation = remember { ThousandsTransformation() },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                        )
+                        if (amountUsd.toD() > 0.0) OutlinedButton(onClick = { pickFor = "USD" }, modifier = Modifier.fillMaxWidth()) {
+                            Text("تاريخ آخر حساب (دولار): " + fmt.format(Date(dateUsd)))
                         }
                     }
                 }
@@ -362,26 +376,31 @@ fun CustomerDialog(onSave: (Customer, PreviousAccount?) -> Unit, onDismiss: () -
                 triedSave = true
                 if (name.isBlank()) return@TextButton
                 val prev = if (initial == null && hasPrev) {
-                    if (prevAmount.toD() <= 0.0) return@TextButton
-                    PreviousAccount(prevAmount.toD(), prevCur, prevDate)
-                } else null
+                    listOfNotNull(
+                        if (amountIqd.toD() > 0.0) PreviousAccount(amountIqd.toD(), "IQD", dateIqd) else null,
+                        if (amountUsd.toD() > 0.0) PreviousAccount(amountUsd.toD(), "USD", dateUsd) else null
+                    ).also { if (it.isEmpty()) return@TextButton }
+                } else emptyList()
                 onSave(Customer(id = initial?.id ?: 0, name = name.trim(), phone = phone.trim(), isWholesale = wholesale), prev)
             }) { Text("حفظ") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
     )
-    if (pickDate) {
-        val state = rememberDatePickerState(initialSelectedDateMillis = prevDate)
+    pickFor?.let { cur ->
+        val state = rememberDatePickerState(initialSelectedDateMillis = if (cur == "USD") dateUsd else dateIqd)
         DatePickerDialog(
-            onDismissRequest = { pickDate = false },
+            onDismissRequest = { pickFor = null },
             confirmButton = {
                 TextButton(onClick = {
                     // منتقي التاريخ يُرجع منتصف الليل UTC؛ نضيف 12 ساعة كي لا يتغير اليوم بحسب المنطقة الزمنية
-                    state.selectedDateMillis?.let { prevDate = it + 12 * 3_600_000L }
-                    pickDate = false
+                    val picked = state.selectedDateMillis
+                    if (picked != null) {
+                        if (cur == "USD") { dateUsd = picked + 12 * 3_600_000L } else { dateIqd = picked + 12 * 3_600_000L }
+                    }
+                    pickFor = null
                 }) { Text("موافق") }
             },
-            dismissButton = { TextButton(onClick = { pickDate = false }) { Text("إلغاء") } }
+            dismissButton = { TextButton(onClick = { pickFor = null }) { Text("إلغاء") } }
         ) { DatePicker(state = state) }
     }
 }
@@ -732,7 +751,8 @@ fun PurchaseModeChips(mode: Int, canPieces: Boolean, onChange: (Int) -> Unit) {
 @Composable
 fun PurchaseDialog(
     initial: Purchase?, fabrics: List<Fabric>, presetFabricId: Long,
-    onSave: (Purchase) -> Unit, onDelete: (() -> Unit)?, onDismiss: () -> Unit
+    onSave: (Purchase) -> Unit, onDelete: (() -> Unit)?, onDismiss: () -> Unit,
+    suppliers: List<String> = emptyList(), presetSupplier: String = ""
 ) {
     val f0 = fabrics.find { it.id == (initial?.fabricId ?: presetFabricId) }
     var fabricId by remember { mutableLongStateOf(initial?.fabricId ?: presetFabricId) }
@@ -767,7 +787,7 @@ fun PurchaseDialog(
     }
     var currency by remember { mutableStateOf(initial?.currency ?: f0?.purchaseCurrency ?: "IQD") }
     var paid by remember { mutableStateOf(initial?.paid?.takeIf { it > 0 }?.plain() ?: "") }
-    var supplier by remember { mutableStateOf(initial?.supplier ?: "") }
+    var supplier by remember { mutableStateOf(initial?.supplier ?: presetSupplier) }
     var note by remember { mutableStateOf(initial?.note ?: "") }
     var menu by remember { mutableStateOf(false) }
     var confirmDel by remember { mutableStateOf(false) }
@@ -845,7 +865,7 @@ fun PurchaseDialog(
                 Text("إجمالي سعر البضاعة: ${total.money(currency)}", fontWeight = FontWeight.Bold)
                 NumField(paid, { paid = it }, "المسدَّد للمورّد وقت الشراء (اختياري)")
                 Text("المتبقي: ${(total - paidVal).money(currency)}", color = MaterialTheme.colorScheme.error)
-                OutlinedTextField(supplier, { supplier = it }, label = { Text("اسم المورّد (اختياري)") }, singleLine = true)
+                SupplierField(supplier, { supplier = it }, suppliers)
                 OutlinedTextField(note, { note = it }, label = { Text("ملاحظة (اختياري)") }, singleLine = true)
                 if (initial == null) Text("ستُضاف الكمية إلى المخزون تلقائياً.", style = MaterialTheme.typography.bodySmall)
             }
@@ -879,14 +899,54 @@ fun PurchaseDialog(
     )
 }
 
+/** حقل اسم المورّد مع أسماء الموردين المحفوظين للاختيار السريع؛ الاسم الجديد يُضاف تلقائياً عند الحفظ */
+@Composable
+fun SupplierField(value: String, onChange: (String) -> Unit, suppliers: List<String>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        OutlinedTextField(value, onChange, label = { Text("اسم المورّد (اختياري)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (suppliers.isNotEmpty()) Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            suppliers.forEach { n ->
+                FilterChip(selected = value.trim() == n, onClick = { onChange(n) }, label = { Text(n) })
+            }
+        }
+    }
+}
+
+/** إضافة/تعديل مورّد */
+@Composable
+fun SupplierDialog(initial: Supplier?, onSave: (Supplier) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var phone by remember { mutableStateOf(initial?.phone ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (initial == null) "إضافة مورّد" else "تعديل المورّد") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(name, { name = it }, label = { Text("اسم المورّد") }, singleLine = true)
+                OutlinedTextField(
+                    phone, { phone = it }, label = { Text("رقم الهاتف (اختياري)") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (name.isNotBlank()) onSave(Supplier(id = initial?.id ?: 0, name = name.trim(), phone = phone.trim()))
+            }) { Text("حفظ") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("إلغاء") } }
+    )
+}
+
 /** دفعة تسديد للمورّد بالدينار أو الدولار */
 @Composable
 fun SupplierPaymentDialog(
-    initial: SupplierPayment?, onSave: (SupplierPayment) -> Unit, onDelete: (() -> Unit)?, onDismiss: () -> Unit
+    initial: SupplierPayment?, onSave: (SupplierPayment) -> Unit, onDelete: (() -> Unit)?, onDismiss: () -> Unit,
+    suppliers: List<String> = emptyList(), presetSupplier: String = ""
 ) {
     var amount by remember { mutableStateOf(initial?.amount?.plain() ?: "") }
     var currency by remember { mutableStateOf(initial?.currency ?: "IQD") }
-    var supplier by remember { mutableStateOf(initial?.supplier ?: "") }
+    var supplier by remember { mutableStateOf(initial?.supplier ?: presetSupplier) }
     var note by remember { mutableStateOf(initial?.note ?: "") }
     var confirmDel by remember { mutableStateOf(false) }
     AlertDialog(
@@ -896,7 +956,7 @@ fun SupplierPaymentDialog(
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 CurrencyChips(currency) { currency = it }
                 NumField(amount, { amount = it }, "المبلغ المسدَّد بال${currencyName(currency)}")
-                OutlinedTextField(supplier, { supplier = it }, label = { Text("اسم المورّد (اختياري)") }, singleLine = true)
+                SupplierField(supplier, { supplier = it }, suppliers)
                 OutlinedTextField(note, { note = it }, label = { Text("ملاحظة (اختياري)") }, singleLine = true)
             }
         },

@@ -128,3 +128,9 @@ data class FabricTotals(val purchased: Double, val sold: Double)
 data class Payable(val total: Double, val paid: Double) {
     val remaining: Double get() = total - paid
 }
+
+/** ملاحظة القائمة التي تمثّل حساب الزبون السابق (رصيد مرحَّل) */
+const val PREVIOUS_ACCOUNT_NOTE = "حساب سابق"
+
+/** حساب سابق للزبون عند إضافته: المبلغ المتبقي عليه وعملته وتاريخ آخر حساب */
+data class PreviousAccount(val amount: Double, val currency: String, val date: Long)

@@ -102,7 +102,16 @@ abstract class AppDao {
     @Query("SELECT * FROM customers ORDER BY name")
     abstract fun customers(): Flow<List<Customer>>
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    abstract suspend fun upsertCustomer(c: Customer)
+    abstract suspend fun upsertCustomer(c: Customer): Long
+
+    /** حفظ زبون جديد مع حسابه السابق (إن وُجد) كقائمة بمبلغ فقط بتاريخ آخر حساب، فيدخل في الرصيد وكشف الحساب والدين المتأخر */
+    @Transaction
+    open suspend fun saveCustomerWithPrevious(c: Customer, prev: PreviousAccount?) {
+        val id = upsertCustomer(c)
+        if (prev != null && prev.amount > 0.0) {
+            insertSale(Sale(customerId = id, date = prev.date, total = prev.amount, paid = 0.0, note = PREVIOUS_ACCOUNT_NOTE, currency = prev.currency))
+        }
+    }
     /** آخر سعر بيع به هذا الصنف لهذا الزبون بنفس العملة (null إن لم يشترِه من قبل) */
     @Query("SELECT si.unitPrice FROM sale_items si INNER JOIN sales s ON s.id = si.saleId WHERE s.customerId = :cid AND si.fabricId = :fid AND s.currency = :cur ORDER BY s.date DESC LIMIT 1")
     abstract suspend fun lastPrice(cid: Long, fid: Long, cur: String): Double?

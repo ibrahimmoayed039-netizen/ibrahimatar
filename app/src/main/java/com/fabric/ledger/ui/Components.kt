@@ -257,9 +257,9 @@ fun FabricDialog(initial: Fabric?, onSave: (Fabric) -> Unit, onDelete: (() -> Un
                         "سعر البيع يختلف عادة من بيع لآخر. اترك هذه الحقول فارغة واكتب السعر عند كل عملية بيع.",
                         style = MaterialTheme.typography.bodySmall
                     )
-                    NumField(retail, { retail = it }, "سعر المفرق بالدينار (اختياري)")
+                    NumField(retail, { retail = it }, "سعر المفرد بالدينار (اختياري)")
                     NumField(wholesale, { wholesale = it }, "سعر الجملة بالدينار (اختياري)")
-                    NumField(retailUsd, { retailUsd = it }, "سعر المفرق بالدولار (اختياري)")
+                    NumField(retailUsd, { retailUsd = it }, "سعر المفرد بالدولار (اختياري)")
                     NumField(wholesaleUsd, { wholesaleUsd = it }, "سعر الجملة بالدولار (اختياري)")
                 }
                 err?.let { Text(it, color = MaterialTheme.colorScheme.error) }

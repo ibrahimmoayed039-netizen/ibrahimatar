@@ -108,8 +108,8 @@ abstract class AppDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) abstract suspend fun insertSupplierIgnore(s: Supplier): Long
     @Query("UPDATE suppliers SET name = :name, phone = :phone WHERE id = :id")
     abstract suspend fun updateSupplierRow(id: Long, name: String, phone: String)
-    @Query("UPDATE purchases SET supplier = :new WHERE supplier = :old") abstract suspend fun renamePurchasesSupplier(old: String, new: String)
-    @Query("UPDATE supplier_payments SET supplier = :new WHERE supplier = :old") abstract suspend fun renamePaymentsSupplier(old: String, new: String)
+    @Query("UPDATE purchases SET supplier = :newName WHERE supplier = :oldName") abstract suspend fun renamePurchasesSupplier(oldName: String, newName: String)
+    @Query("UPDATE supplier_payments SET supplier = :newName WHERE supplier = :oldName") abstract suspend fun renamePaymentsSupplier(oldName: String, newName: String)
     @Query("SELECT COUNT(*) FROM purchases WHERE supplier = :name") abstract suspend fun purchasesCountOf(name: String): Int
     @Query("SELECT COUNT(*) FROM supplier_payments WHERE supplier = :name") abstract suspend fun paymentsCountOf(name: String): Int
     @Query("DELETE FROM suppliers WHERE id = :id") abstract suspend fun deleteSupplierRow(id: Long)
